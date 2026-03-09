@@ -11,6 +11,8 @@ import { ClaudeProvider } from '../../ai/claude.js';
 import { trackTokenUsage } from '../utils/token-tracker.js';
 import { handleCliError, cliErrors } from '../utils/error-handler.js';
 import { logger } from '../utils/logger.js';
+import { sessionManager } from '../../session/index.js';
+import { HookRunner } from '../../hooks/runner.js';
 
 const SEVERITY_ORDER: ReviewFinding['severity'][] = ['critical', 'warning', 'suggestion', 'praise'];
 
@@ -90,6 +92,14 @@ export const reviewCommand = new Command('review')
       cliErrors.notGitRepo();
     }
 
+    // pre-review 훅 실행
+    const hookRunner = await HookRunner.fromConfig(cwd);
+    try {
+      await hookRunner.run('pre-review');
+    } catch (err) {
+      handleCliError(err);
+    }
+
     let config;
     try {
       config = await loadConfig();
@@ -166,5 +176,22 @@ export const reviewCommand = new Command('review')
       ).catch(() => {});
     }
 
+    await sessionManager.recordAgentCall({
+      agentName: 'CodeReviewer',
+      command: 'review',
+      timestamp: new Date().toISOString(),
+      durationMs: result.metadata.durationMs,
+      tokensUsed: result.metadata.tokensUsed,
+      success: result.success,
+      error: result.success ? undefined : result.error.message,
+    }).catch(() => {});
+
     printReviewResult(result.data);
+
+    // post-review 훅 실행
+    try {
+      await hookRunner.run('post-review');
+    } catch (err) {
+      handleCliError(err);
+    }
   });

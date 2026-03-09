@@ -38,10 +38,13 @@ export const initCommand = new Command('init')
         message: '이슈 트래커를 선택하세요:',
         choices: [
           { name: 'Notion', value: 'notion' },
+          { name: 'GitHub Issues', value: 'github' },
+          { name: 'Jira', value: 'jira' },
           { name: 'Mock (테스트용)', value: 'mock' },
         ],
         default: 'mock',
       },
+      // Notion
       {
         type: 'password',
         name: 'notionApiKey',
@@ -58,6 +61,56 @@ export const initCommand = new Command('init')
         when: (ans: Record<string, string>) => ans['trackerType'] === 'notion',
         validate: (input: string) =>
           input.trim().length > 0 || '데이터베이스 ID를 입력해야 합니다',
+      },
+      // GitHub Issues
+      {
+        type: 'input',
+        name: 'githubOwner',
+        message: 'GitHub 저장소 owner (사용자명 또는 조직명):',
+        when: (ans: Record<string, string>) => ans['trackerType'] === 'github',
+        validate: (input: string) =>
+          input.trim().length > 0 || 'owner를 입력해야 합니다',
+      },
+      {
+        type: 'input',
+        name: 'githubRepo',
+        message: 'GitHub 저장소 이름:',
+        when: (ans: Record<string, string>) => ans['trackerType'] === 'github',
+        validate: (input: string) =>
+          input.trim().length > 0 || '저장소 이름을 입력해야 합니다',
+      },
+      {
+        type: 'password',
+        name: 'githubToken',
+        message: 'GitHub Personal Access Token (선택, 비공개 저장소):',
+        when: (ans: Record<string, string>) =>
+          ans['trackerType'] === 'github' && !process.env['GITHUB_TOKEN'],
+      },
+      // Jira
+      {
+        type: 'input',
+        name: 'jiraDomain',
+        message: 'Jira 도메인 (예: mycompany.atlassian.net):',
+        when: (ans: Record<string, string>) => ans['trackerType'] === 'jira',
+        validate: (input: string) =>
+          input.trim().length > 0 || 'Jira 도메인을 입력해야 합니다',
+      },
+      {
+        type: 'input',
+        name: 'jiraEmail',
+        message: 'Jira 계정 이메일:',
+        when: (ans: Record<string, string>) => ans['trackerType'] === 'jira',
+        validate: (input: string) =>
+          input.trim().length > 0 || '이메일을 입력해야 합니다',
+      },
+      {
+        type: 'password',
+        name: 'jiraApiToken',
+        message: 'Jira API Token:',
+        when: (ans: Record<string, string>) =>
+          ans['trackerType'] === 'jira' && !process.env['JIRA_API_TOKEN'],
+        validate: (input: string) =>
+          input.trim().length > 0 || 'Jira API Token을 입력해야 합니다',
       },
       {
         type: 'input',
@@ -97,13 +150,35 @@ export const initCommand = new Command('init')
           : {}),
       },
       tracker: {
-        type: answers['trackerType'] as 'notion' | 'mock',
+        type: answers['trackerType'] as 'notion' | 'github' | 'jira' | 'mock',
         ...(answers['trackerType'] === 'notion'
           ? {
               notion: {
                 databaseId: answers['notionDatabaseId'] as string,
                 ...(answers['notionApiKey']
                   ? { apiKey: answers['notionApiKey'] as string }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(answers['trackerType'] === 'github'
+          ? {
+              github: {
+                owner: answers['githubOwner'] as string,
+                repo: answers['githubRepo'] as string,
+                ...(answers['githubToken']
+                  ? { token: answers['githubToken'] as string }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(answers['trackerType'] === 'jira'
+          ? {
+              jira: {
+                domain: answers['jiraDomain'] as string,
+                email: answers['jiraEmail'] as string,
+                ...(answers['jiraApiToken']
+                  ? { apiToken: answers['jiraApiToken'] as string }
                   : {}),
               },
             }

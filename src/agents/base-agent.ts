@@ -15,6 +15,16 @@ export abstract class BaseAgent<TInput, TOutput> implements Agent<TInput, TOutpu
     } catch (error) {
       const duration = Date.now() - startTime;
       context.logger.error(`[${this.name}] Failed: ${error}`);
+      // AgentError 형태로 throw된 경우 code를 보존
+      if (
+        error !== null &&
+        typeof error === 'object' &&
+        'code' in error &&
+        'message' in error &&
+        typeof (error as AgentError).code === 'string'
+      ) {
+        return fail<TOutput>(this.name, error as AgentError, duration);
+      }
       const agentError: AgentError = {
         code: 'AI_ERROR',
         message: String(error),

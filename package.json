@@ -4,7 +4,8 @@
   "description": "AI-powered developer workflow CLI tool",
   "type": "module",
   "bin": {
-    "junflow": "./dist/cli/index.js"
+    "junflow": "./dist/cli/index.js",
+    "junflow-mcp": "./dist/mcp/index.js"
   },
   "scripts": {
     "test": "vitest run",
@@ -24,6 +25,7 @@
   "keywords": [],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@notionhq/client": "^5.11.1",
     "boxen": "^8.0.1",
     "chalk": "^5.6.2",

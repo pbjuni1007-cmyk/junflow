@@ -12,6 +12,8 @@ import { CommitWriter } from '../../agents/commit-writer.js';
 import { ClaudeProvider } from '../../ai/claude.js';
 import { handleCliError, cliErrors } from '../utils/error-handler.js';
 import { logger } from '../utils/logger.js';
+import { sessionManager } from '../../session/index.js';
+import { HookRunner } from '../../hooks/runner.js';
 
 interface IssueContext {
   title: string;
@@ -51,6 +53,14 @@ export const commitCommand = new Command('commit')
     dryRun?: boolean;
   }) => {
     const cwd = process.cwd();
+
+    // 0. pre-commit 훅 실행
+    const hookRunner = await HookRunner.fromConfig(cwd);
+    try {
+      await hookRunner.run('pre-commit');
+    } catch (err) {
+      handleCliError(err);
+    }
 
     // 1. Config 로드
     let config;
@@ -120,6 +130,17 @@ export const commitCommand = new Command('commit')
     );
 
     spinner.stop();
+
+    // 세션 에이전트 호출 기록
+    await sessionManager.recordAgentCall({
+      agentName: 'CommitWriter',
+      command: 'commit',
+      timestamp: new Date().toISOString(),
+      durationMs: result.metadata.durationMs,
+      tokensUsed: result.metadata.tokensUsed,
+      success: result.success,
+      error: result.success ? undefined : result.error.message,
+    }).catch(() => {});
 
     if (!result.success) {
       handleCliError(result.error);
@@ -194,11 +215,21 @@ export const commitCommand = new Command('commit')
 
     // 10. git commit 실행
     const commitSpinner = ora('커밋 중...').start();
+    let commitHash: string | undefined;
     try {
-      const hash = await commit(cwd, selectedMessage);
-      commitSpinner.succeed(chalk.green(`커밋 완료: ${chalk.bold(hash || selectedMessage)}`));
+      commitHash = await commit(cwd, selectedMessage);
+      commitSpinner.succeed(chalk.green(`커밋 완료: ${chalk.bold(commitHash || selectedMessage)}`));
     } catch (err) {
       commitSpinner.stop();
+      handleCliError(err);
+    }
+
+    // 11. post-commit 훅 실행
+    try {
+      await hookRunner.run('post-commit', {
+        JUNFLOW_COMMIT_HASH: commitHash ?? '',
+      });
+    } catch (err) {
       handleCliError(err);
     }
   });

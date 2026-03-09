@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { getCurrentBranch, getStatus, getLastCommit } from '../../git/operations.js';
 import { getSessionTokenSummary } from '../utils/token-tracker.js';
+import { sessionManager } from '../../session/index.js';
 
 interface CurrentIssue {
   id?: string;
@@ -91,6 +92,17 @@ export const statusCommand = new Command('status')
       console.log(`│   ${chalk.gray(relativeTime)}`);
     } catch {
       console.log(`│ ${chalk.bold('Last Commit:')} ${chalk.gray('(없음)')}`);
+    }
+
+    // 세션 정보
+    const currentSession = await sessionManager.getCurrent();
+    if (currentSession) {
+      console.log('│');
+      console.log(chalk.bold('├─ Current Session ' + '─'.repeat(31) + '┤'));
+      console.log(`│ ${chalk.bold('Session ID:')} ${currentSession.id.slice(0, 8)}`);
+      console.log(`│ ${chalk.bold('Started:')} ${formatRelativeTime(currentSession.startedAt)}`);
+      console.log(`│ ${chalk.bold('Agent Calls:')} ${currentSession.agentCalls.length}`);
+      console.log(`│ ${chalk.bold('Tokens:')} ${formatNumber(currentSession.tokenUsage.total)}`);
     }
 
     // 세션 토큰 사용량

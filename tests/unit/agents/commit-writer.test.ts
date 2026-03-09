@@ -183,7 +183,7 @@ describe('CommitWriter', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.code).toBe('AI_ERROR');
+      expect(['AI_ERROR', 'AI_PARSE_ERROR']).toContain(result.error.code);
     }
   });
 

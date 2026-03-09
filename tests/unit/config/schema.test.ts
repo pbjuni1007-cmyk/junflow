@@ -101,10 +101,10 @@ describe('junFlowConfigSchema', () => {
   });
 
   describe('필수 필드 누락 시 zod 에러', () => {
-    it('ai.provider 누락 시 에러', () => {
+    it('ai.maxTokens 음수 값은 에러', () => {
       const config = {
         ...validConfig,
-        ai: { model: 'claude-sonnet-4-20250514', maxTokens: 2048 },
+        ai: { ...validConfig.ai, maxTokens: -1 },
       };
       expect(() => junFlowConfigSchema.parse(config)).toThrow();
     });
@@ -125,12 +125,12 @@ describe('junFlowConfigSchema', () => {
 
   describe('잘못된 타입 값 검증', () => {
     it('잘못된 provider 값은 에러', () => {
-      const config = { ...validConfig, ai: { ...validConfig.ai, provider: 'openai' } };
+      const config = { ...validConfig, ai: { ...validConfig.ai, provider: 'invalid-provider' } };
       expect(() => junFlowConfigSchema.parse(config)).toThrow();
     });
 
     it('잘못된 tracker.type 값은 에러', () => {
-      const config = { ...validConfig, tracker: { type: 'jira' } };
+      const config = { ...validConfig, tracker: { type: 'invalid-tracker' } };
       expect(() => junFlowConfigSchema.parse(config)).toThrow();
     });
 

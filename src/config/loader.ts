@@ -31,12 +31,24 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: Partial
 function applyEnvOverrides(config: JunFlowConfig): JunFlowConfig {
   const result = structuredClone(config);
 
-  if (process.env['ANTHROPIC_API_KEY']) {
+  if (result.ai.provider === 'claude' && process.env['ANTHROPIC_API_KEY']) {
     result.ai.apiKey = process.env['ANTHROPIC_API_KEY'];
+  } else if (result.ai.provider === 'openai' && process.env['OPENAI_API_KEY']) {
+    result.ai.apiKey = process.env['OPENAI_API_KEY'];
+  } else if (result.ai.provider === 'gemini' && process.env['GEMINI_API_KEY']) {
+    result.ai.apiKey = process.env['GEMINI_API_KEY'];
   }
 
   if (process.env['NOTION_API_KEY'] && result.tracker.notion) {
     result.tracker.notion.apiKey = process.env['NOTION_API_KEY'];
+  }
+
+  if (process.env['GITHUB_TOKEN'] && result.tracker.github) {
+    result.tracker.github.token = process.env['GITHUB_TOKEN'];
+  }
+
+  if (process.env['JIRA_API_TOKEN'] && result.tracker.jira) {
+    result.tracker.jira.apiToken = process.env['JIRA_API_TOKEN'];
   }
 
   return result;
