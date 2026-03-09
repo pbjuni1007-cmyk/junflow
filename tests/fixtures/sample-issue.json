@@ -1,0 +1,10 @@
+{
+  "id": "ISSUE-1",
+  "title": "사용자 프로필 페이지 구현",
+  "description": "사용자 프로필 조회/수정 페이지를 구현합니다. 프로필 이미지 업로드와 반응형 레이아웃을 포함합니다.",
+  "status": "todo",
+  "labels": ["feature", "frontend"],
+  "priority": "medium",
+  "url": "https://example.com/issues/1",
+  "raw": {}
+}

@@ -1,0 +1,76 @@
+{
+  "object": "data_source",
+  "id": "31d739cc-9a3f-813e-aa12-000b3ba787fc",
+  "database_id": "31d739cc-9a3f-81e4-a604-daf134809832",
+  "title": "Issues",
+  "properties": {
+    "이슈": {
+      "id": "title",
+      "name": "이슈",
+      "type": "title"
+    },
+    "상태": {
+      "id": "status",
+      "name": "상태",
+      "type": "status",
+      "status": {
+        "options": [
+          { "name": "Not started", "color": "default" },
+          { "name": "In progress", "color": "blue" },
+          { "name": "Done", "color": "green" }
+        ]
+      }
+    },
+    "우선순위": {
+      "id": "UyVJ",
+      "name": "우선순위",
+      "type": "select",
+      "select": {
+        "options": [
+          { "name": "Low", "color": "gray" },
+          { "name": "Medium", "color": "yellow" },
+          { "name": "High", "color": "orange" },
+          { "name": "Urgent", "color": "red" }
+        ]
+      }
+    },
+    "유형": {
+      "id": "z%3Ft%3B",
+      "name": "유형",
+      "type": "select",
+      "select": {
+        "options": [
+          { "name": "feature", "color": "blue" },
+          { "name": "bugfix", "color": "red" },
+          { "name": "refactor", "color": "purple" },
+          { "name": "chore", "color": "gray" },
+          { "name": "docs", "color": "green" }
+        ]
+      }
+    },
+    "라벨": {
+      "id": "iAc%7D",
+      "name": "라벨",
+      "type": "multi_select",
+      "multi_select": {
+        "options": [
+          { "name": "frontend", "color": "blue" },
+          { "name": "backend", "color": "green" },
+          { "name": "infra", "color": "orange" },
+          { "name": "testing", "color": "yellow" },
+          { "name": "ui/ux", "color": "pink" }
+        ]
+      }
+    },
+    "담당자": {
+      "id": "%5DtiR",
+      "name": "담당자",
+      "type": "rich_text"
+    },
+    "설명": {
+      "id": "TdjJ",
+      "name": "설명",
+      "type": "rich_text"
+    }
+  }
+}

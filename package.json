@@ -1,0 +1,48 @@
+{
+  "name": "junflow",
+  "version": "0.1.0",
+  "description": "AI-powered developer workflow CLI tool",
+  "type": "module",
+  "bin": {
+    "junflow": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:int": "vitest run tests/integration",
+    "test:cov": "vitest run --coverage",
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "author": "Jun",
+  "license": "MIT",
+  "directories": {
+    "doc": "docs"
+  },
+  "keywords": [],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@notionhq/client": "^5.11.1",
+    "boxen": "^8.0.1",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "inquirer": "^13.3.0",
+    "js-yaml": "^4.1.1",
+    "ora": "^9.3.0",
+    "simple-git": "^3.32.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.9",
+    "@types/js-yaml": "^4.0.9",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "eslint": "^10.0.3",
+    "prettier": "^3.8.1",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
