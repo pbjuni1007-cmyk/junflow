@@ -10,6 +10,10 @@ import { loadConfig } from '../../config/loader.js';
 import { ensureGitRepo, getStagedDiff, commit } from '../../git/operations.js';
 import { CommitWriter } from '../../agents/commit-writer.js';
 import { ClaudeProvider } from '../../ai/claude.js';
+import { getAvailableProviders } from '../../ai/multi-provider.js';
+import { ConsensusRunner } from '../../ai/consensus.js';
+import { Verifier, verifyLoop } from '../../agents/verifier.js';
+import { commitMessageSchema } from '../../agents/commit-writer.js';
 import { handleCliError, cliErrors } from '../utils/error-handler.js';
 import { logger } from '../utils/logger.js';
 import { sessionManager } from '../../session/index.js';
@@ -45,12 +49,16 @@ export const commitCommand = new Command('commit')
   .option('--convention <type>', '커밋 컨벤션 (conventional/gitmoji)')
   .option('--auto', '첫 번째 추천 자동 사용')
   .option('--dry-run', '메시지만 출력, 커밋하지 않음')
+  .option('--consensus', '멀티모델 합의 (사용 가능한 모든 AI 모델로 생성 후 합성)')
+  .option('--verify', '자동 검증 루프 (품질 미달 시 재생성)')
   .action(async (options: {
     all?: boolean;
     lang?: string;
     convention?: string;
     auto?: boolean;
     dryRun?: boolean;
+    consensus?: boolean;
+    verify?: boolean;
   }) => {
     const cwd = process.cwd();
 
@@ -108,7 +116,7 @@ export const commitCommand = new Command('commit')
       cliErrors.missingApiKey('ANTHROPIC_API_KEY');
     }
 
-    const aiProvider = new ClaudeProvider(apiKey);
+    const aiProvider = new ClaudeProvider(apiKey!);
     const agent = new CommitWriter(aiProvider);
     const agentLogger = {
       info: (msg: string) => logger.debug(msg),
@@ -116,37 +124,138 @@ export const commitCommand = new Command('commit')
       error: (msg: string) => logger.error(msg),
       debug: (msg: string) => logger.debug(msg),
     };
+    const agentContext = { workingDir: cwd, config, logger: agentLogger };
+    const agentInput = {
+      diff,
+      issueAnalysis,
+      convention: options.convention as 'conventional' | 'gitmoji' | undefined,
+      language: options.lang as 'ko' | 'en' | undefined,
+    };
 
-    const spinner = ora('AI가 커밋 메시지를 생성 중...').start();
+    let message: string;
+    let alternatives: string[];
 
-    const result = await agent.execute(
-      {
-        diff,
-        issueAnalysis,
-        convention: options.convention as 'conventional' | 'gitmoji' | undefined,
-        language: options.lang as 'ko' | 'en' | undefined,
-      },
-      { workingDir: cwd, config, logger: agentLogger },
-    );
+    if (options.consensus) {
+      // 멀티모델 합의 모드
+      const spinner = ora('멀티모델 합의 생성 중...').start();
+      const providers = await getAvailableProviders();
+      if (providers.length === 0) {
+        spinner.stop();
+        logger.error('AI API 키가 설정되지 않았습니다. ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY 중 하나를 설정해주세요.');
+        process.exit(1);
+      }
+      spinner.text = `${providers.length}개 모델로 커밋 메시지 생성 중...`;
 
-    spinner.stop();
+      const consensusRunner = new ConsensusRunner(aiProvider);
+      const { truncateDiff } = await import('../../ai/diff-truncator.js');
+      const { COMMIT_WRITER_SYSTEM } = await import('../../ai/prompts/commit-message.js');
+      const { truncatedDiff } = truncateDiff(diff);
 
-    // 세션 에이전트 호출 기록
-    await sessionManager.recordAgentCall({
-      agentName: 'CommitWriter',
-      command: 'commit',
-      timestamp: new Date().toISOString(),
-      durationMs: result.metadata.durationMs,
-      tokensUsed: result.metadata.tokensUsed,
-      success: result.success,
-      error: result.success ? undefined : result.error.message,
-    }).catch(() => {});
+      const convention = agentInput.convention ?? config.git.commitConvention;
+      const language = agentInput.language ?? config.git.commitLanguage;
 
-    if (!result.success) {
-      handleCliError(result.error);
+      try {
+        const consensusResult = await consensusRunner.run(
+          providers,
+          {
+            systemPrompt: `${COMMIT_WRITER_SYSTEM}\nUse ${convention} convention. ${language === 'ko' ? '한국어로 작성.' : 'Write in English.'}\nRespond with JSON: {"message":"string","alternatives":["string"],"scope":"string|null","breakingChange":boolean}`,
+            userPrompt: `## Staged Diff\n${truncatedDiff}${issueAnalysis ? `\n\n## Issue Context\nTitle: ${issueAnalysis.title}\nType: ${issueAnalysis.type}` : ''}`,
+            maxTokens: 2048,
+            temperature: 0.3,
+          },
+          commitMessageSchema,
+        );
+
+        spinner.stop();
+        logger.info(`합의 완료: ${consensusResult.providersUsed.join(' + ')} (일치도: ${consensusResult.agreementScore}%)`);
+        message = consensusResult.consensus.message;
+        alternatives = consensusResult.consensus.alternatives;
+
+        await sessionManager.recordAgentCall({
+          agentName: 'ConsensusRunner',
+          command: 'commit --consensus',
+          timestamp: new Date().toISOString(),
+          durationMs: 0,
+          tokensUsed: consensusResult.totalTokensUsed,
+          success: true,
+        }).catch(() => {});
+      } catch (err) {
+        spinner.stop();
+        handleCliError(err);
+      }
+    } else if (options.verify) {
+      // 자동 검증 루프 모드
+      const spinner = ora('AI 커밋 메시지 생성 + 검증 중...').start();
+      const verifier = new Verifier(aiProvider);
+
+      try {
+        const verified = await verifyLoop(agent, verifier, agentInput, agentContext, {
+          taskDescription: `Generate a high-quality commit message for the following diff:\n${diff.slice(0, 500)}...`,
+          criteria: [
+            'Message follows conventional commit format',
+            'Message is concise (under 72 characters)',
+            'Message accurately describes the changes',
+            'Alternatives are meaningfully different from main message',
+          ],
+          maxRetries: 2,
+          onRetry: (attempt, issues) => {
+            spinner.text = `검증 실패, 재생성 중 (${attempt}/2)... ${issues[0] ?? ''}`;
+          },
+        });
+
+        spinner.stop();
+
+        const vr = verified.verification;
+        const statusIcon = vr.approved ? chalk.green('✓') : chalk.yellow('△');
+        logger.info(`검증 ${statusIcon} (${vr.score}/10, ${verified.attempts}회 시도)`);
+        if (vr.issues.length > 0) {
+          for (const issue of vr.issues) {
+            logger.warn(`  ${issue}`);
+          }
+        }
+
+        if (!verified.result.success) {
+          handleCliError(verified.result.error);
+        }
+
+        message = verified.result.data.message;
+        alternatives = verified.result.data.alternatives;
+
+        await sessionManager.recordAgentCall({
+          agentName: 'CommitWriter+Verifier',
+          command: 'commit --verify',
+          timestamp: new Date().toISOString(),
+          durationMs: verified.result.metadata.durationMs,
+          tokensUsed: verified.result.metadata.tokensUsed,
+          success: verified.result.success,
+        }).catch(() => {});
+      } catch (err) {
+        spinner.stop();
+        handleCliError(err);
+      }
+    } else {
+      // 기본 모드
+      const spinner = ora('AI가 커밋 메시지를 생성 중...').start();
+      const result = await agent.execute(agentInput, agentContext);
+      spinner.stop();
+
+      await sessionManager.recordAgentCall({
+        agentName: 'CommitWriter',
+        command: 'commit',
+        timestamp: new Date().toISOString(),
+        durationMs: result.metadata.durationMs,
+        tokensUsed: result.metadata.tokensUsed,
+        success: result.success,
+        error: result.success ? undefined : result.error.message,
+      }).catch(() => {});
+
+      if (!result.success) {
+        handleCliError(result.error);
+      }
+
+      message = result.data.message;
+      alternatives = result.data.alternatives;
     }
-
-    const { message, alternatives } = result.data;
     const candidates = [message, ...alternatives].slice(0, 3);
 
     // 7. 결과 출력

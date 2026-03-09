@@ -20,7 +20,7 @@ export interface CommitMessageResult {
   breakingChange: boolean;
 }
 
-const commitMessageSchema = z.object({
+export const commitMessageSchema = z.object({
   message: z.string(),
   alternatives: z.array(z.string()),
   scope: z.string().optional().nullable(),
