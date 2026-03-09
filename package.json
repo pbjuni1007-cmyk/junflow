@@ -1,11 +1,11 @@
 {
   "name": "junflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI-powered developer workflow CLI tool",
   "type": "module",
   "bin": {
-    "junflow": "./dist/cli/index.js",
-    "junflow-mcp": "./dist/mcp/index.js"
+    "junflow": "dist/cli/index.js",
+    "junflow-mcp": "dist/mcp/index.js"
   },
   "scripts": {
     "test": "vitest run",
@@ -19,10 +19,33 @@
   },
   "author": "Jun",
   "license": "MIT",
-  "directories": {
-    "doc": "docs"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pbjuni1007-cmyk/junflow.git"
   },
-  "keywords": [],
+  "homepage": "https://github.com/pbjuni1007-cmyk/junflow#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cli",
+    "ai",
+    "workflow",
+    "developer-tools",
+    "git",
+    "commit-message",
+    "code-review",
+    "claude",
+    "openai",
+    "gemini",
+    "notion",
+    "jira",
+    "github-issues",
+    "mcp",
+    "typescript"
+  ],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@modelcontextprotocol/sdk": "^1.27.1",

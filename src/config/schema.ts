@@ -28,6 +28,8 @@ export const junFlowConfigSchema = z.object({
         branchNamer: z.string().optional(),
         commitWriter: z.string().optional(),
         codeReviewer: z.string().optional(),
+        documentReviewer: z.string().optional(),
+        deepResearcher: z.string().optional(),
       })
       .optional(),
   }),

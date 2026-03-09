@@ -1,0 +1,14 @@
+src/
+tests/
+docs/
+.claude/
+.omc/
+.eslintrc.cjs
+.prettierrc
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
+*.test.ts
+coverage/
+.env*
+node_modules/
