@@ -26,7 +26,7 @@ export interface DocumentReviewResult {
   keyQuestions: string[];
 }
 
-const documentReviewSchema = z.object({
+export const documentReviewSchema = z.object({
   summary: z.string(),
   overallScore: z.number(),
   findings: z.array(

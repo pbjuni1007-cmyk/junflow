@@ -33,7 +33,7 @@ const reviewFindingSchema = z.object({
   suggestion: z.string().optional().nullable(),
 });
 
-const codeReviewResultSchema = z.object({
+export const codeReviewResultSchema = z.object({
   summary: z.string(),
   findings: z.array(reviewFindingSchema),
   overallScore: z.number().min(1).max(10),

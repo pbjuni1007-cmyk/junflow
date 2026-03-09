@@ -4,9 +4,12 @@ import chalk from 'chalk';
 import boxen from 'boxen';
 import ora from 'ora';
 import { loadConfig } from '../../config/loader.js';
-import { DocumentReviewer, DocumentFinding } from '../../agents/document-reviewer.js';
+import { DocumentReviewer, DocumentFinding, documentReviewSchema } from '../../agents/document-reviewer.js';
 import { DeepResearcher, ClaimValidation, SimilarProduct } from '../../agents/deep-researcher.js';
 import { ClaudeProvider } from '../../ai/claude.js';
+import { getAvailableProviders } from '../../ai/multi-provider.js';
+import { ConsensusRunner } from '../../ai/consensus.js';
+import { Verifier, verifyLoop } from '../../agents/verifier.js';
 import { createSearchProvider } from '../../search/factory.js';
 import { trackTokenUsage } from '../utils/token-tracker.js';
 import { handleCliError, cliErrors } from '../utils/error-handler.js';
@@ -166,7 +169,9 @@ export const reviewDocCommand = new Command('review-doc')
   .argument('<file>', '리뷰할 문서 파일 경로')
   .option('--deep', 'Deep Research 모드 (웹 검색 + 주장 검증)')
   .option('-f, --focus <areas...>', '집중 영역 (feasibility, completeness, technical, market)')
-  .action(async (filePath: string, options: { deep?: boolean; focus?: string[] }) => {
+  .option('--consensus', '멀티모델 합의 (사용 가능한 모든 AI 모델로 리뷰 후 합성)')
+  .option('--verify', '자동 검증 루프 (품질 미달 시 재생성)')
+  .action(async (filePath: string, options: { deep?: boolean; focus?: string[]; consensus?: boolean; verify?: boolean }) => {
     // 1. 파일 읽기
     let content: string;
     try {
@@ -194,7 +199,7 @@ export const reviewDocCommand = new Command('review-doc')
       cliErrors.missingApiKey('ANTHROPIC_API_KEY');
     }
 
-    const aiProvider = new ClaudeProvider(apiKey);
+    const aiProvider = new ClaudeProvider(apiKey!);
     const agentLogger = {
       info: (msg: string) => { if (config.output.verbose) console.log(chalk.gray(msg)); },
       warn: (msg: string) => logger.warn(msg),
@@ -202,39 +207,127 @@ export const reviewDocCommand = new Command('review-doc')
       debug: (msg: string) => { if (config.output.verbose) console.log(chalk.dim(msg)); },
     };
     const context = { workingDir: process.cwd(), config, logger: agentLogger };
+    const agentInput = { content, filePath, focusAreas: options.focus };
 
     // 3. DocumentReviewer 실행
     const reviewSpinner = ora('문서 리뷰 중...').start();
     const reviewer = new DocumentReviewer(aiProvider);
-    const reviewResult = await reviewer.execute(
-      { content, filePath, focusAreas: options.focus },
-      context,
-    );
-    reviewSpinner.stop();
+    let review: import('../../agents/document-reviewer.js').DocumentReviewResult;
 
-    if (!reviewResult.success) {
-      handleCliError(reviewResult.error);
-    }
+    if (options.consensus) {
+      // 멀티모델 합의 모드
+      reviewSpinner.text = '멀티모델 합의 문서 리뷰 중...';
+      const providers = await getAvailableProviders();
+      if (providers.length === 0) {
+        reviewSpinner.stop();
+        logger.error('AI API 키가 설정되지 않았습니다. ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY 중 하나를 설정해주세요.');
+        process.exit(1);
+      }
+      reviewSpinner.text = `${providers.length}개 모델로 문서 리뷰 중...`;
 
-    // 토큰 추적
-    if (reviewResult.metadata.tokensUsed) {
-      await trackTokenUsage({
+      const consensusRunner = new ConsensusRunner(aiProvider);
+      const { DOCUMENT_REVIEWER_SYSTEM } = await import('../../ai/prompts/document-review.js');
+
+      try {
+        const consensusResult = await consensusRunner.run(
+          providers,
+          {
+            systemPrompt: DOCUMENT_REVIEWER_SYSTEM,
+            userPrompt: `## Document: ${filePath}\n\n${content}${options.focus ? `\n\n## Focus Areas: ${options.focus.join(', ')}` : ''}`,
+            maxTokens: 4096,
+            temperature: 0.3,
+          },
+          documentReviewSchema,
+        );
+
+        reviewSpinner.stop();
+        logger.info(`합의 완료: ${consensusResult.providersUsed.join(' + ')} (일치도: ${consensusResult.agreementScore}%)`);
+        review = consensusResult.consensus;
+
+        await sessionManager.recordAgentCall({
+          agentName: 'ConsensusRunner',
+          command: 'review-doc --consensus',
+          timestamp: new Date().toISOString(),
+          durationMs: 0,
+          tokensUsed: consensusResult.totalTokensUsed,
+          success: true,
+        }).catch(() => {});
+      } catch (err) {
+        reviewSpinner.stop();
+        handleCliError(err);
+      }
+    } else if (options.verify) {
+      // 자동 검증 루프 모드
+      reviewSpinner.text = '문서 리뷰 + 검증 중...';
+      const verifier = new Verifier(aiProvider);
+
+      try {
+        const verified = await verifyLoop(reviewer, verifier, agentInput, context, {
+          taskDescription: `Review the document "${filePath}" for completeness, logical gaps, and quality.`,
+          criteria: [
+            'Review identifies logical gaps and missing sections',
+            'Findings have clear severity ratings',
+            'Missing topics are relevant',
+            'Key questions are actionable',
+          ],
+          maxRetries: 2,
+          onRetry: (attempt, issues) => {
+            reviewSpinner.text = `검증 실패, 재리뷰 중 (${attempt}/2)... ${issues[0] ?? ''}`;
+          },
+        });
+
+        reviewSpinner.stop();
+
+        const vr = verified.verification;
+        const statusIcon = vr.approved ? chalk.green('✓') : chalk.yellow('△');
+        logger.info(`검증 ${statusIcon} (${vr.score}/10, ${verified.attempts}회 시도)`);
+
+        if (!verified.result.success) {
+          handleCliError(verified.result.error);
+        }
+
+        review = verified.result.data;
+
+        await sessionManager.recordAgentCall({
+          agentName: 'DocumentReviewer+Verifier',
+          command: 'review-doc --verify',
+          timestamp: new Date().toISOString(),
+          durationMs: verified.result.metadata.durationMs,
+          tokensUsed: verified.result.metadata.tokensUsed,
+          success: verified.result.success,
+        }).catch(() => {});
+      } catch (err) {
+        reviewSpinner.stop();
+        handleCliError(err);
+      }
+    } else {
+      // 기본 모드
+      const reviewResult = await reviewer.execute(agentInput, context);
+      reviewSpinner.stop();
+
+      if (!reviewResult.success) {
+        handleCliError(reviewResult.error);
+      }
+
+      review = reviewResult.data;
+
+      if (reviewResult.metadata.tokensUsed) {
+        await trackTokenUsage({
+          agentName: 'DocumentReviewer',
+          tokensUsed: reviewResult.metadata.tokensUsed,
+          timestamp: new Date().toISOString(),
+        }, process.cwd()).catch(() => {});
+      }
+
+      await sessionManager.recordAgentCall({
         agentName: 'DocumentReviewer',
-        tokensUsed: reviewResult.metadata.tokensUsed,
+        command: 'review-doc',
         timestamp: new Date().toISOString(),
-      }, process.cwd()).catch(() => {});
+        durationMs: reviewResult.metadata.durationMs,
+        tokensUsed: reviewResult.metadata.tokensUsed,
+        success: reviewResult.success,
+      }).catch(() => {});
     }
-
-    await sessionManager.recordAgentCall({
-      agentName: 'DocumentReviewer',
-      command: 'review-doc',
-      timestamp: new Date().toISOString(),
-      durationMs: reviewResult.metadata.durationMs,
-      tokensUsed: reviewResult.metadata.tokensUsed,
-      success: reviewResult.success,
-    }).catch(() => {});
-
-    const review = reviewResult.data;
     printDocumentReview(
       review.summary,
       review.overallScore,
