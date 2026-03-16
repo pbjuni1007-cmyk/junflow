@@ -12,7 +12,7 @@ export class HookRunner {
     this.hooks = hooks;
   }
 
-  static async fromConfig(workingDir: string): Promise<HookRunner> {
+  static async fromConfig(_workingDir: string): Promise<HookRunner> {
     try {
       const config = await loadConfig();
       const hooks = (config.hooks ?? []) as HookDefinition[];
@@ -52,7 +52,7 @@ export class HookRunner {
         results.push(result);
 
         if (!hook.continueOnError) {
-          throw new Error(`Hook failed: ${hook.command}\n${result.error}`);
+          throw new Error(`Hook failed: ${hook.command}\n${result.error}`, { cause: error });
         }
       }
     }

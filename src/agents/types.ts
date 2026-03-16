@@ -24,7 +24,7 @@ export interface AgentMetadata {
 }
 
 export interface AgentError {
-  code: 'AI_ERROR' | 'AI_PARSE_ERROR' | 'TRACKER_ERROR' | 'GIT_ERROR' | 'VALIDATION_ERROR' | 'CONFIG_ERROR' | 'NETWORK_ERROR';
+  code: 'AI_ERROR' | 'AI_PARSE_ERROR' | 'TRACKER_ERROR' | 'GIT_ERROR' | 'VALIDATION_ERROR' | 'CONFIG_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMIT_ERROR' | 'AUTH_ERROR';
   message: string;
   cause?: unknown;
 }

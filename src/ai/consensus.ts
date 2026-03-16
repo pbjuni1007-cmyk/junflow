@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AIProvider, AIRequest, AIResponse } from './types.js';
+import { AIProvider, AIRequest } from './types.js';
 import { parseAIResponse } from './response-parser.js';
 
 export interface ConsensusResult<T> {

@@ -11,6 +11,8 @@ const AGENT_ERROR_MESSAGES: Record<AgentError['code'], string> = {
   VALIDATION_ERROR: '입력값 검증에 실패했습니다.',
   CONFIG_ERROR: '설정 파일이 손상되었습니다. `junflow config reset`으로 초기화하거나 직접 수정해주세요.',
   NETWORK_ERROR: 'API 서버 응답이 지연되고 있습니다. 네트워크 연결을 확인해주세요.',
+  RATE_LIMIT_ERROR: 'API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.',
+  AUTH_ERROR: 'API 인증에 실패했습니다. API 키가 올바른지 확인해주세요.',
 };
 
 function isAgentError(error: unknown): error is { code: AgentError['code']; message: string } {

@@ -81,6 +81,38 @@ describe('junFlowConfigSchema', () => {
       expect(result.ai.agentModels?.commitWriter).toBe('claude-haiku-4');
     });
 
+    it('agentRouting 설정을 파싱한다', () => {
+      const config = {
+        ...validConfig,
+        ai: {
+          ...validConfig.ai,
+          agentRouting: {
+            codeReviewer: { provider: 'openai' as const, model: 'gpt-4o', timeout: 30000 },
+            commitWriter: { model: 'claude-haiku' },
+          },
+        },
+      };
+      const result = junFlowConfigSchema.parse(config);
+      expect(result.ai.agentRouting?.codeReviewer?.provider).toBe('openai');
+      expect(result.ai.agentRouting?.codeReviewer?.model).toBe('gpt-4o');
+      expect(result.ai.agentRouting?.codeReviewer?.timeout).toBe(30000);
+      expect(result.ai.agentRouting?.commitWriter?.model).toBe('claude-haiku');
+    });
+
+    it('agentRouting과 agentModels가 동시에 존재해도 파싱된다', () => {
+      const config = {
+        ...validConfig,
+        ai: {
+          ...validConfig.ai,
+          agentModels: { commitWriter: 'legacy-model' },
+          agentRouting: { commitWriter: { provider: 'gemini' as const, model: 'gemini-pro' } },
+        },
+      };
+      const result = junFlowConfigSchema.parse(config);
+      expect(result.ai.agentModels?.commitWriter).toBe('legacy-model');
+      expect(result.ai.agentRouting?.commitWriter?.provider).toBe('gemini');
+    });
+
     it('gitmoji commitConvention을 파싱한다', () => {
       const config = {
         ...validConfig,

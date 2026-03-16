@@ -113,8 +113,6 @@ export async function verifyLoop<TInput, TOutput>(
   attempts: number;
 }> {
   const maxRetries = options.maxRetries ?? 2;
-  let lastVerification: VerificationResult | null = null;
-
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const result = await agent.execute(input, context);
 
@@ -156,8 +154,6 @@ export async function verifyLoop<TInput, TOutput>(
         attempts: attempt + 1,
       };
     }
-
-    lastVerification = verifyResult.data;
 
     if (verifyResult.data.approved) {
       return {

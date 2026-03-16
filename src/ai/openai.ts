@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { AIProvider, AIRequest, AIResponse } from './types.js';
+import { withRetry } from './retry.js';
 
 export class OpenAIProvider implements AIProvider {
   name = 'openai';
@@ -10,6 +11,13 @@ export class OpenAIProvider implements AIProvider {
   }
 
   async complete(request: AIRequest): Promise<AIResponse> {
+    return withRetry(
+      () => this.doComplete(request),
+      { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 30000 },
+    );
+  }
+
+  private async doComplete(request: AIRequest): Promise<AIResponse> {
     try {
       const response = await this.client.chat.completions.create({
         model: request.model ?? 'gpt-4o',
@@ -37,6 +45,24 @@ export class OpenAIProvider implements AIProvider {
       };
     } catch (error) {
       if (error instanceof OpenAI.APIError) {
+        if (error.status === 429) {
+          throw Object.assign(
+            new Error(`Rate limit exceeded: ${error.message}`),
+            { code: 'RATE_LIMIT_ERROR', cause: error, status: 429 },
+          );
+        }
+        if (error.status === 401) {
+          throw Object.assign(
+            new Error(`Authentication failed: ${error.message}`),
+            { code: 'AUTH_ERROR', cause: error },
+          );
+        }
+        if (error.status === 502 || error.status === 503 || error.status === 504) {
+          throw Object.assign(
+            new Error(`AI API error: ${error.message}`),
+            { code: 'AI_ERROR', cause: error, status: error.status },
+          );
+        }
         throw Object.assign(
           new Error(`AI API error: ${error.message}`),
           { code: 'AI_ERROR', cause: error },
@@ -46,6 +72,8 @@ export class OpenAIProvider implements AIProvider {
         error instanceof Error &&
         (error.message.includes('fetch') ||
           error.message.includes('ECONNREFUSED') ||
+          error.message.includes('ETIMEDOUT') ||
+          error.message.includes('ENOTFOUND') ||
           error.message.includes('network'))
       ) {
         throw Object.assign(

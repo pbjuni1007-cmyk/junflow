@@ -110,11 +110,11 @@ export const teamCommand = new Command('team')
     const agentLogger = makeAgentLogger(config.output.verbose);
     const context: AgentContext = { workingDir: cwd, config, logger: agentLogger };
 
-    // AgentFactory: 에이전트 이름 → 인스턴스
+    // AgentFactory: 에이전트 이름 → 인스턴스 (synchronous factory requires require())
+    /* eslint-disable @typescript-eslint/no-require-imports */
     const agentFactory: AgentFactory = (agentName: string): Agent<unknown, unknown> | null => {
       switch (agentName) {
         case 'IssueAnalyzer': {
-          // IssueAnalyzer는 tracker가 필요하므로 mock으로 대체
           const { IssueAnalyzer } = require('../../agents/issue-analyzer.js') as typeof import('../../agents/issue-analyzer.js');
           const { MockTracker } = require('../../trackers/mock.js') as typeof import('../../trackers/mock.js');
           return new IssueAnalyzer(aiProvider, new MockTracker()) as Agent<unknown, unknown>;
@@ -135,6 +135,7 @@ export const teamCommand = new Command('team')
           return null;
       }
     };
+    /* eslint-enable @typescript-eslint/no-require-imports */
 
     const runner = new WorkflowRunner(context, agentFactory);
 

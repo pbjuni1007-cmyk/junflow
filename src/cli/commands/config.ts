@@ -26,15 +26,6 @@ function maskConfig(obj: unknown, secretKeys = ['apiKey']): unknown {
   return result;
 }
 
-function getNestedValue(obj: Record<string, unknown>, dotPath: string): unknown {
-  return dotPath.split('.').reduce<unknown>((cur, key) => {
-    if (cur !== null && typeof cur === 'object') {
-      return (cur as Record<string, unknown>)[key];
-    }
-    return undefined;
-  }, obj);
-}
-
 function setNestedValue(
   obj: Record<string, unknown>,
   dotPath: string,

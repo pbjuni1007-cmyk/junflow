@@ -1,5 +1,4 @@
 import fs from 'fs/promises';
-import path from 'path';
 import yaml from 'js-yaml';
 import { junFlowConfigSchema, type JunFlowConfig } from './schema.js';
 import { CONFIG_DIR, CONFIG_FILE, DEFAULT_CONFIG } from './defaults.js';

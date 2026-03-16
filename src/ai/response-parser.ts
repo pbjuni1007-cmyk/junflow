@@ -55,7 +55,7 @@ export async function parseAIResponse<T>(
     } as ParseError;
   }
 
-  let lastError: ParseError = { code: 'AI_PARSE_ERROR', message: 'Unknown parse error' };
+  let lastError: ParseError;
 
   try {
     return await attemptParse(response);
@@ -79,5 +79,5 @@ export async function parseAIResponse<T>(
     }
   }
 
-  throw lastError;
+  throw lastError!;
 }

@@ -5,5 +5,11 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     pool: 'forks',
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/index.ts', 'src/**/types.ts', 'src/cli/commands/**', 'src/mcp/**'],
+      reporter: ['text'],
+    },
   },
 });

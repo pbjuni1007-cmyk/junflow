@@ -90,8 +90,58 @@ export class JiraTracker implements IssueTracker {
     };
   }
 
+  private classifyHttpError(status: number, statusText: string, context: string): AgentError {
+    if (status === 401 || status === 403) {
+      return {
+        code: 'AUTH_ERROR',
+        message: `Jira 인증 실패: ${status} ${statusText}. 이메일과 API 토큰을 확인해주세요.`,
+      };
+    }
+    if (status === 429) {
+      return {
+        code: 'RATE_LIMIT_ERROR',
+        message: `Jira API 요청 한도 초과. 잠시 후 다시 시도해주세요.`,
+      };
+    }
+    if (status === 502 || status === 503 || status === 504) {
+      return {
+        code: 'NETWORK_ERROR',
+        message: `Jira API 서버 오류: ${status} ${statusText}`,
+      };
+    }
+    return {
+      code: 'TRACKER_ERROR',
+      message: `${context}: ${status} ${statusText}`,
+    };
+  }
+
+  private async safeFetch(url: string, init?: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      if (error instanceof Error) {
+        const msg = error.message;
+        if (
+          msg.includes('ECONNREFUSED') ||
+          msg.includes('ETIMEDOUT') ||
+          msg.includes('ENOTFOUND') ||
+          msg.includes('fetch') ||
+          msg.includes('network')
+        ) {
+          const err: AgentError = {
+            code: 'NETWORK_ERROR',
+            message: `Jira API 연결 실패: ${msg}`,
+            cause: error,
+          };
+          throw err;
+        }
+      }
+      throw error;
+    }
+  }
+
   async getIssue(issueId: string): Promise<TrackerIssue> {
-    const res = await fetch(`${this.baseUrl}/issue/${issueId}`, {
+    const res = await this.safeFetch(`${this.baseUrl}/issue/${issueId}`, {
       headers: this.headers,
     });
 
@@ -104,11 +154,7 @@ export class JiraTracker implements IssueTracker {
     }
 
     if (!res.ok) {
-      const err: AgentError = {
-        code: 'TRACKER_ERROR',
-        message: `Jira API 오류: ${res.status} ${res.statusText}`,
-      };
-      throw err;
+      throw this.classifyHttpError(res.status, res.statusText, `Jira API 오류`);
     }
 
     const issue = (await res.json()) as JiraIssue;
@@ -117,16 +163,12 @@ export class JiraTracker implements IssueTracker {
 
   async updateIssueStatus(issueId: string, status: string): Promise<void> {
     // 1. 사용 가능한 transition 목록 조회
-    const transRes = await fetch(`${this.baseUrl}/issue/${issueId}/transitions`, {
+    const transRes = await this.safeFetch(`${this.baseUrl}/issue/${issueId}/transitions`, {
       headers: this.headers,
     });
 
     if (!transRes.ok) {
-      const err: AgentError = {
-        code: 'TRACKER_ERROR',
-        message: `Jira transition 목록 조회 실패: ${transRes.status} ${transRes.statusText}`,
-      };
-      throw err;
+      throw this.classifyHttpError(transRes.status, transRes.statusText, `Jira transition 목록 조회 실패`);
     }
 
     const { transitions } = (await transRes.json()) as JiraTransitionsResult;
@@ -144,36 +186,28 @@ export class JiraTracker implements IssueTracker {
     }
 
     // 2. transition 실행
-    const res = await fetch(`${this.baseUrl}/issue/${issueId}/transitions`, {
+    const res = await this.safeFetch(`${this.baseUrl}/issue/${issueId}/transitions`, {
       method: 'POST',
       headers: this.headers,
       body: JSON.stringify({ transition: { id: target.id } }),
     });
 
     if (!res.ok && res.status !== 204) {
-      const err: AgentError = {
-        code: 'TRACKER_ERROR',
-        message: `Jira 이슈 상태 업데이트 실패: ${res.status} ${res.statusText}`,
-      };
-      throw err;
+      throw this.classifyHttpError(res.status, res.statusText, `Jira 이슈 상태 업데이트 실패`);
     }
   }
 
   async listIssues(filter?: Record<string, unknown>): Promise<TrackerIssue[]> {
     const jql = (filter?.['jql'] as string | undefined) ?? 'ORDER BY created DESC';
 
-    const res = await fetch(`${this.baseUrl}/search`, {
+    const res = await this.safeFetch(`${this.baseUrl}/search`, {
       method: 'POST',
       headers: this.headers,
       body: JSON.stringify({ jql, maxResults: 50 }),
     });
 
     if (!res.ok) {
-      const err: AgentError = {
-        code: 'TRACKER_ERROR',
-        message: `Jira 이슈 목록 조회 실패: ${res.status} ${res.statusText}`,
-      };
-      throw err;
+      throw this.classifyHttpError(res.status, res.statusText, `Jira 이슈 목록 조회 실패`);
     }
 
     const result = (await res.json()) as JiraSearchResult;

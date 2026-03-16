@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Mock retry to bypass delays
+vi.mock('../../../src/ai/retry.js', () => ({
+  withRetry: async (fn: () => Promise<unknown>) => fn(),
+}));
+
 const mockGenerateContent = vi.fn();
 const mockGetGenerativeModel = vi.fn();
 
@@ -87,13 +92,31 @@ describe('GeminiProvider', () => {
     ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
   });
 
-  it('API 에러 → AI_ERROR로 변환', async () => {
+  it('API 키 에러 → AUTH_ERROR로 변환', async () => {
     mockGenerateContent.mockRejectedValueOnce(new Error('API key not valid'));
 
     const provider = new GeminiProvider('test-key');
     await expect(
       provider.complete({ systemPrompt: 'sys', userPrompt: 'user' }),
+    ).rejects.toMatchObject({ code: 'AUTH_ERROR' });
+  });
+
+  it('일반 API 에러 → AI_ERROR로 변환', async () => {
+    mockGenerateContent.mockRejectedValueOnce(new Error('Internal server error'));
+
+    const provider = new GeminiProvider('test-key');
+    await expect(
+      provider.complete({ systemPrompt: 'sys', userPrompt: 'user' }),
     ).rejects.toMatchObject({ code: 'AI_ERROR' });
+  });
+
+  it('Rate limit 에러 → RATE_LIMIT_ERROR로 변환', async () => {
+    mockGenerateContent.mockRejectedValueOnce(new Error('429 quota exceeded'));
+
+    const provider = new GeminiProvider('test-key');
+    await expect(
+      provider.complete({ systemPrompt: 'sys', userPrompt: 'user' }),
+    ).rejects.toMatchObject({ code: 'RATE_LIMIT_ERROR' });
   });
 
   it('usageMetadata가 없으면 tokensUsed는 0', async () => {

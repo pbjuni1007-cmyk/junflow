@@ -1,5 +1,6 @@
 import type { AgentContext, Agent } from '../agents/types.js';
 import type { TeamWorkflow, WorkflowResult, StepResult, WorkflowStep } from './types.js';
+import { topologicalSort } from '../dag/topology.js';
 
 export type AgentFactory = (agentName: string, context: AgentContext) => Agent<unknown, unknown> | null;
 
@@ -13,80 +14,37 @@ export class WorkflowRunner {
     const results = new Map<string, StepResult>();
     const startTime = Date.now();
 
-    const orderedSteps = this.resolveOrder(workflow.steps);
+    const stepMap = new Map(workflow.steps.map((s) => [s.id, s]));
 
-    for (const step of orderedSteps) {
-      // 1. 선행 스텝 성공 여부 확인
-      const depsFailed = (step.dependsOn ?? []).some((depId) => {
-        const dep = results.get(depId);
-        return !dep || !dep.success;
-      });
+    // topologicalSort로 레벨별 그룹 획득
+    const dagNodes = workflow.steps.map((s) => ({
+      id: s.id,
+      dependsOn: s.dependsOn ?? [],
+    }));
+    const levels = topologicalSort(dagNodes);
 
-      if (depsFailed) {
-        results.set(step.id, {
-          stepId: step.id,
-          agentName: step.agentName,
-          success: false,
-          error: 'Skipped: dependency step failed',
-          durationMs: 0,
-        });
-        if (!step.optional) {
-          break;
-        }
-        continue;
-      }
+    let aborted = false;
 
-      // 2. inputMapping으로 이전 결과 → 현재 입력 변환
-      const input = this.buildInput(step, results);
+    for (const level of levels) {
+      if (aborted) break;
 
-      // 3. 에이전트 인스턴스 생성
-      const agent = this.agentFactory(step.agentName, this.context);
+      const levelSteps = level
+        .map((id) => stepMap.get(id))
+        .filter((s): s is WorkflowStep => s !== undefined);
 
-      if (!agent) {
-        const stepResult: StepResult = {
-          stepId: step.id,
-          agentName: step.agentName,
-          success: false,
-          error: `Unknown agent: ${step.agentName}`,
-          durationMs: 0,
-        };
-        results.set(step.id, stepResult);
-        if (!step.optional) {
-          break;
-        }
-        continue;
-      }
+      // 같은 레벨의 스텝들을 Promise.all로 병렬 실행
+      const levelResults = await Promise.all(
+        levelSteps.map((step) => this.executeStep(step, results)),
+      );
 
-      // 4. 에이전트 실행
-      const stepStart = Date.now();
-      try {
-        const result = await agent.execute(input, this.context);
-        const stepResult: StepResult = {
-          stepId: step.id,
-          agentName: step.agentName,
-          success: result.success,
-          data: result.success ? result.data : undefined,
-          error: result.success ? undefined : result.error.message,
-          durationMs: result.metadata.durationMs,
-          tokensUsed: result.metadata.tokensUsed,
-        };
+      // 결과를 results 맵에 저장하고 abort 여부 판단
+      for (let i = 0; i < levelSteps.length; i++) {
+        const step = levelSteps[i]!;
+        const stepResult = levelResults[i]!;
         results.set(step.id, stepResult);
 
-        if (!result.success && !step.optional) {
-          break;
-        }
-      } catch (err) {
-        const stepResult: StepResult = {
-          stepId: step.id,
-          agentName: step.agentName,
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
-          durationMs: Date.now() - stepStart,
-        };
-        results.set(step.id, stepResult);
-
-        if (!step.optional) {
-          break;
+        if (!stepResult.success && !step.optional) {
+          aborted = true;
         }
       }
     }
@@ -118,6 +76,66 @@ export class WorkflowRunner {
       totalDurationMs: Date.now() - startTime,
       success,
     };
+  }
+
+  private async executeStep(
+    step: WorkflowStep,
+    results: Map<string, StepResult>,
+  ): Promise<StepResult> {
+    // 1. 선행 스텝 성공 여부 확인
+    const depsFailed = (step.dependsOn ?? []).some((depId) => {
+      const dep = results.get(depId);
+      return !dep || !dep.success;
+    });
+
+    if (depsFailed) {
+      return {
+        stepId: step.id,
+        agentName: step.agentName,
+        success: false,
+        error: 'Skipped: dependency step failed',
+        durationMs: 0,
+      };
+    }
+
+    // 2. inputMapping으로 이전 결과 → 현재 입력 변환
+    const input = this.buildInput(step, results);
+
+    // 3. 에이전트 인스턴스 생성
+    const agent = this.agentFactory(step.agentName, this.context);
+
+    if (!agent) {
+      return {
+        stepId: step.id,
+        agentName: step.agentName,
+        success: false,
+        error: `Unknown agent: ${step.agentName}`,
+        durationMs: 0,
+      };
+    }
+
+    // 4. 에이전트 실행
+    const stepStart = Date.now();
+    try {
+      const result = await agent.execute(input, this.context);
+      return {
+        stepId: step.id,
+        agentName: step.agentName,
+        success: result.success,
+        data: result.success ? result.data : undefined,
+        error: result.success ? undefined : result.error.message,
+        durationMs: result.metadata.durationMs,
+        tokensUsed: result.metadata.tokensUsed,
+      };
+    } catch (err) {
+      return {
+        stepId: step.id,
+        agentName: step.agentName,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - stepStart,
+      };
+    }
   }
 
   private buildInput(step: WorkflowStep, results: Map<string, StepResult>): unknown {

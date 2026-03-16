@@ -197,11 +197,11 @@ describe('GitHubTracker', () => {
       expect(issues).toEqual([]);
     });
 
-    it('API 실패 시 TRACKER_ERROR를 throw한다', async () => {
+    it('API 인증 실패(401) 시 AUTH_ERROR를 throw한다', async () => {
       global.fetch = mockFetch({}, 401);
 
       await expect(tracker.listIssues()).rejects.toMatchObject({
-        code: 'TRACKER_ERROR',
+        code: 'AUTH_ERROR',
       } satisfies Partial<AgentError>);
     });
   });

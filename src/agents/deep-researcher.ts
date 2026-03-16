@@ -116,7 +116,7 @@ export class DeepResearcher extends BaseAgent<DeepResearcherInput, DeepResearchR
     });
 
     // Step 2: 웹 검색 (searchProvider가 있으면)
-    let searchContext = '';
+    let searchContext: string;
     let searchUsed = false;
 
     if (this.searchProvider) {

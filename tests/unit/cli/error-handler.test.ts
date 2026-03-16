@@ -81,6 +81,33 @@ describe('handleCliError()', () => {
     expect(output).toContain('설정 파일이 손상되었습니다');
   });
 
+  it('AgentError(RATE_LIMIT_ERROR) → 요청 한도 초과 메시지', async () => {
+    const { handleCliError } = await getHandler();
+    const err = { code: 'RATE_LIMIT_ERROR', message: 'too many requests' };
+
+    expect(() => handleCliError(err)).toThrow('process.exit(1)');
+    const output = errorSpy.mock.calls[0]?.[0] as string;
+    expect(output).toContain('요청 한도를 초과했습니다');
+  });
+
+  it('AgentError(AUTH_ERROR) → 인증 실패 메시지', async () => {
+    const { handleCliError } = await getHandler();
+    const err = { code: 'AUTH_ERROR', message: 'unauthorized' };
+
+    expect(() => handleCliError(err)).toThrow('process.exit(1)');
+    const output = errorSpy.mock.calls[0]?.[0] as string;
+    expect(output).toContain('API 인증에 실패했습니다');
+  });
+
+  it('AgentError(VALIDATION_ERROR) → 입력값 검증 실패 메시지', async () => {
+    const { handleCliError } = await getHandler();
+    const err = { code: 'VALIDATION_ERROR', message: 'invalid input' };
+
+    expect(() => handleCliError(err)).toThrow('process.exit(1)');
+    const output = errorSpy.mock.calls[0]?.[0] as string;
+    expect(output).toContain('입력값 검증에 실패했습니다');
+  });
+
   it('ZodError → 설정 파일 손상 메시지', async () => {
     const { handleCliError } = await getHandler();
     const zodErr = new ZodError([

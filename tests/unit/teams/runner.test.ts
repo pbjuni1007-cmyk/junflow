@@ -313,6 +313,210 @@ describe('WorkflowRunner', () => {
     });
   });
 
+  describe('레벨별 병렬 실행', () => {
+    it('같은 레벨의 독립 스텝들이 병렬로 실행된다', async () => {
+      const executionLog: { name: string; start: number; end: number }[] = [];
+
+      const makeDelayAgent = (name: string, delayMs: number): Agent<unknown, unknown> => ({
+        name,
+        description: '',
+        execute: vi.fn().mockImplementation(() => {
+          const start = Date.now();
+          return new Promise((resolve) => {
+            setTimeout(() => {
+              executionLog.push({ name, start, end: Date.now() });
+              resolve({
+                success: true,
+                data: { agent: name },
+                metadata: { agentName: name, durationMs: delayMs, tokensUsed: 50 },
+              });
+            }, delayMs);
+          });
+        }),
+      });
+
+      const agentA = makeDelayAgent('AgentA', 50);
+      const agentB = makeDelayAgent('AgentB', 50);
+      const agentC = makeDelayAgent('AgentC', 50);
+
+      const factory: AgentFactory = (name) => {
+        if (name === 'AgentA') return agentA;
+        if (name === 'AgentB') return agentB;
+        if (name === 'AgentC') return agentC;
+        return null;
+      };
+
+      const workflow: TeamWorkflow = {
+        name: 'test-parallel-exec',
+        description: '병렬 실행 테스트',
+        steps: [
+          { id: 's1', agentName: 'AgentA', description: 'A' },
+          { id: 's2', agentName: 'AgentB', description: 'B' },
+          { id: 's3', agentName: 'AgentC', description: 'C' },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const startTime = Date.now();
+      const result = await runner.execute(workflow);
+      const elapsed = Date.now() - startTime;
+
+      expect(result.success).toBe(true);
+      expect(result.steps).toHaveLength(3);
+      // 병렬 실행이면 총 소요 시간이 순차 실행(150ms+)보다 작아야 함
+      expect(elapsed).toBeLessThan(130);
+    });
+
+    it('레벨 간은 순차 실행된다 (의존성 보장)', async () => {
+      const executionOrder: string[] = [];
+
+      const makeTrackAgent = (name: string): Agent<unknown, unknown> => ({
+        name,
+        description: '',
+        execute: vi.fn().mockImplementation(() => {
+          executionOrder.push(name);
+          return Promise.resolve({
+            success: true,
+            data: { agent: name },
+            metadata: { agentName: name, durationMs: 10, tokensUsed: 50 },
+          });
+        }),
+      });
+
+      const agentA = makeTrackAgent('AgentA');
+      const agentB = makeTrackAgent('AgentB');
+      const agentC = makeTrackAgent('AgentC');
+
+      const factory: AgentFactory = (name) => {
+        if (name === 'AgentA') return agentA;
+        if (name === 'AgentB') return agentB;
+        if (name === 'AgentC') return agentC;
+        return null;
+      };
+
+      // A (level 0) → B (level 1) → C (level 2)
+      const workflow: TeamWorkflow = {
+        name: 'test-level-order',
+        description: '레벨 순차 테스트',
+        steps: [
+          { id: 's1', agentName: 'AgentA', description: 'A' },
+          { id: 's2', agentName: 'AgentB', description: 'B', dependsOn: ['s1'] },
+          { id: 's3', agentName: 'AgentC', description: 'C', dependsOn: ['s2'] },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute(workflow);
+
+      expect(result.success).toBe(true);
+      expect(executionOrder).toEqual(['AgentA', 'AgentB', 'AgentC']);
+    });
+
+    it('다이아몬드 DAG에서 병렬 + 순차가 올바르게 동작한다', async () => {
+      const executionOrder: string[] = [];
+
+      const makeTrackAgent = (name: string): Agent<unknown, unknown> => ({
+        name,
+        description: '',
+        execute: vi.fn().mockImplementation(() => {
+          executionOrder.push(name);
+          return Promise.resolve({
+            success: true,
+            data: { agent: name },
+            metadata: { agentName: name, durationMs: 10, tokensUsed: 50 },
+          });
+        }),
+      });
+
+      const factory: AgentFactory = (name) => makeTrackAgent(name);
+
+      // Diamond: A → B, A → C, B+C → D
+      const workflow: TeamWorkflow = {
+        name: 'test-diamond',
+        description: '다이아몬드 DAG 테스트',
+        steps: [
+          { id: 'a', agentName: 'A', description: 'A' },
+          { id: 'b', agentName: 'B', description: 'B', dependsOn: ['a'] },
+          { id: 'c', agentName: 'C', description: 'C', dependsOn: ['a'] },
+          { id: 'd', agentName: 'D', description: 'D', dependsOn: ['b', 'c'] },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute(workflow);
+
+      expect(result.success).toBe(true);
+      expect(result.steps).toHaveLength(4);
+      // A must be first, D must be last
+      expect(executionOrder[0]).toBe('A');
+      expect(executionOrder[3]).toBe('D');
+      // B and C are in the middle (order between them is non-deterministic)
+      expect(executionOrder.slice(1, 3).sort()).toEqual(['B', 'C']);
+    });
+
+    it('optional 스텝 실패 시 같은 레벨의 다른 스텝에 영향 없음', async () => {
+      const agentA = makeSuccessAgent('AgentA', { ok: true });
+      const agentB = makeFailAgent('AgentB', 'optional fail');
+      const agentC = makeSuccessAgent('AgentC', { ok: true });
+
+      const factory: AgentFactory = (name) => {
+        if (name === 'AgentA') return agentA;
+        if (name === 'AgentB') return agentB;
+        if (name === 'AgentC') return agentC;
+        return null;
+      };
+
+      const workflow: TeamWorkflow = {
+        name: 'test-optional-parallel',
+        description: 'optional 병렬 테스트',
+        steps: [
+          { id: 's1', agentName: 'AgentA', description: 'A' },
+          { id: 's2', agentName: 'AgentB', description: 'B', optional: true },
+          { id: 's3', agentName: 'AgentC', description: 'C' },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute(workflow);
+
+      expect(result.success).toBe(true);
+      expect(result.steps.find((s) => s.stepId === 's1')?.success).toBe(true);
+      expect(result.steps.find((s) => s.stepId === 's2')?.success).toBe(false);
+      expect(result.steps.find((s) => s.stepId === 's3')?.success).toBe(true);
+    });
+
+    it('optional 스텝 실패 시 후속 레벨 스텝은 계속 실행된다', async () => {
+      const agentA = makeFailAgent('AgentA', 'optional fail');
+      const agentB = makeSuccessAgent('AgentB', { ok: true });
+
+      const factory: AgentFactory = (name) => {
+        if (name === 'AgentA') return agentA;
+        if (name === 'AgentB') return agentB;
+        return null;
+      };
+
+      // A (optional, level 0) → B (level 1, depends on A)
+      // B should get "Skipped: dependency step failed" but workflow remains success
+      // because A is optional
+      const workflow: TeamWorkflow = {
+        name: 'test-optional-dep',
+        description: 'optional 의존성 테스트',
+        steps: [
+          { id: 's1', agentName: 'AgentA', description: 'A', optional: true },
+          { id: 's2', agentName: 'AgentB', description: 'B', dependsOn: ['s1'], optional: true },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute(workflow);
+
+      expect(result.success).toBe(true);
+      const s2 = result.steps.find((s) => s.stepId === 's2');
+      expect(s2?.success).toBe(false);
+      expect(s2?.error).toMatch(/[Ss]kipped/);
+    });
+  });
+
   describe('resolveOrder (위상 정렬)', () => {
     it('순환 참조가 있으면 에러를 던진다', () => {
       const runner = new WorkflowRunner(makeContext(), () => null);

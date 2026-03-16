@@ -28,14 +28,6 @@ interface NotionMultiSelectProperty {
   multi_select: Array<{ name: string }>;
 }
 
-type NotionProperty =
-  | NotionTitleProperty
-  | NotionRichTextProperty
-  | NotionSelectProperty
-  | NotionStatusProperty
-  | NotionMultiSelectProperty
-  | { type: string };
-
 // notion-field-mapping.md 기반 Notion 속성명 상수
 const NOTION_FIELD = {
   TITLE: '이슈',
@@ -113,6 +105,51 @@ function pageToTrackerIssue(page: Record<string, unknown>): TrackerIssue {
   };
 }
 
+function classifyNotionError(error: unknown): AgentError {
+  if (error instanceof Error) {
+    const msg = error.message;
+
+    // 네트워크 에러
+    if (
+      msg.includes('ECONNREFUSED') ||
+      msg.includes('ETIMEDOUT') ||
+      msg.includes('ENOTFOUND') ||
+      msg.includes('fetch') ||
+      msg.includes('network')
+    ) {
+      return {
+        code: 'NETWORK_ERROR',
+        message: `Notion API 연결 실패: ${msg}`,
+        cause: error,
+      };
+    }
+
+    // 인증 에러
+    if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized') || msg.includes('unauthorized')) {
+      return {
+        code: 'AUTH_ERROR',
+        message: `Notion 인증 실패. API 키와 데이터베이스 공유 설정을 확인해주세요.`,
+        cause: error,
+      };
+    }
+
+    // Rate limit
+    if (msg.includes('429') || msg.includes('rate limit')) {
+      return {
+        code: 'RATE_LIMIT_ERROR',
+        message: `Notion API 요청 한도 초과. 잠시 후 다시 시도해주세요.`,
+        cause: error,
+      };
+    }
+  }
+
+  return {
+    code: 'TRACKER_ERROR',
+    message: error instanceof Error ? error.message : String(error),
+    cause: error,
+  };
+}
+
 export class NotionTracker implements IssueTracker {
   name = 'notion';
   private client: Client;
@@ -131,16 +168,21 @@ export class NotionTracker implements IssueTracker {
   }
 
   async getIssue(issueId: string): Promise<TrackerIssue> {
-    // title 속성에서 issueId로 필터 쿼리
-    const response = await this.client.databases.query({
-      database_id: this.databaseId,
-      filter: {
-        property: NOTION_FIELD.TITLE,
-        title: {
-          equals: issueId,
+    let response;
+    try {
+      // title 속성에서 issueId로 필터 쿼리
+      response = await this.client.databases.query({
+        database_id: this.databaseId,
+        filter: {
+          property: NOTION_FIELD.TITLE,
+          title: {
+            equals: issueId,
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      throw classifyNotionError(error);
+    }
 
     if (response.results.length === 0) {
       const err: AgentError = {
@@ -156,22 +198,30 @@ export class NotionTracker implements IssueTracker {
 
   async updateIssueStatus(issueId: string, status: string): Promise<void> {
     const issue = await this.getIssue(issueId);
-    await this.client.pages.update({
-      page_id: issue.id,
-      properties: {
-        [NOTION_FIELD.STATUS]: {
-          status: { name: status },
+    try {
+      await this.client.pages.update({
+        page_id: issue.id,
+        properties: {
+          [NOTION_FIELD.STATUS]: {
+            status: { name: status },
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      throw classifyNotionError(error);
+    }
   }
 
   async listIssues(filter?: Record<string, unknown>): Promise<TrackerIssue[]> {
-    const response = await this.client.databases.query({
-      database_id: this.databaseId,
-      ...(filter ? { filter: filter as Parameters<Client['databases']['query']>[0]['filter'] } : {}),
-    });
+    try {
+      const response = await this.client.databases.query({
+        database_id: this.databaseId,
+        ...(filter ? { filter: filter as Parameters<Client['databases']['query']>[0]['filter'] } : {}),
+      });
 
-    return response.results.map((page) => pageToTrackerIssue(page as Record<string, unknown>));
+      return response.results.map((page) => pageToTrackerIssue(page as Record<string, unknown>));
+    } catch (error) {
+      throw classifyNotionError(error);
+    }
   }
 }

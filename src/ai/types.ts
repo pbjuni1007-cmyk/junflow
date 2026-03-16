@@ -16,3 +16,8 @@ export interface AIResponse {
   tokensUsed: { input: number; output: number };
   model: string;
 }
+
+export interface FallbackChain {
+  primary: AIProvider;
+  fallbacks: AIProvider[];
+}

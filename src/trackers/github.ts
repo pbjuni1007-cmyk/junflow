@@ -63,8 +63,58 @@ export class GitHubTracker implements IssueTracker {
     };
   }
 
+  private classifyHttpError(status: number, statusText: string, context: string): AgentError {
+    if (status === 401 || status === 403) {
+      return {
+        code: 'AUTH_ERROR',
+        message: `GitHub 인증 실패: ${status} ${statusText}. 토큰 권한을 확인해주세요.`,
+      };
+    }
+    if (status === 429) {
+      return {
+        code: 'RATE_LIMIT_ERROR',
+        message: `GitHub API 요청 한도 초과. 잠시 후 다시 시도해주세요.`,
+      };
+    }
+    if (status === 502 || status === 503 || status === 504) {
+      return {
+        code: 'NETWORK_ERROR',
+        message: `GitHub API 서버 오류: ${status} ${statusText}`,
+      };
+    }
+    return {
+      code: 'TRACKER_ERROR',
+      message: `${context}: ${status} ${statusText}`,
+    };
+  }
+
+  private async safeFetch(url: string, init?: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      if (error instanceof Error) {
+        const msg = error.message;
+        if (
+          msg.includes('ECONNREFUSED') ||
+          msg.includes('ETIMEDOUT') ||
+          msg.includes('ENOTFOUND') ||
+          msg.includes('fetch') ||
+          msg.includes('network')
+        ) {
+          const err: AgentError = {
+            code: 'NETWORK_ERROR',
+            message: `GitHub API 연결 실패: ${msg}`,
+            cause: error,
+          };
+          throw err;
+        }
+      }
+      throw error;
+    }
+  }
+
   async getIssue(issueId: string): Promise<TrackerIssue> {
-    const res = await fetch(`${this.baseUrl}/issues/${issueId}`, {
+    const res = await this.safeFetch(`${this.baseUrl}/issues/${issueId}`, {
       headers: this.headers,
     });
 
@@ -77,11 +127,7 @@ export class GitHubTracker implements IssueTracker {
     }
 
     if (!res.ok) {
-      const err: AgentError = {
-        code: 'TRACKER_ERROR',
-        message: `GitHub API 오류: ${res.status} ${res.statusText}`,
-      };
-      throw err;
+      throw this.classifyHttpError(res.status, res.statusText, `GitHub API 오류`);
     }
 
     const issue = (await res.json()) as GitHubIssue;
@@ -90,7 +136,7 @@ export class GitHubTracker implements IssueTracker {
 
   async updateIssueStatus(issueId: string, status: string): Promise<void> {
     const state = status === 'closed' ? 'closed' : 'open';
-    const res = await fetch(`${this.baseUrl}/issues/${issueId}`, {
+    const res = await this.safeFetch(`${this.baseUrl}/issues/${issueId}`, {
       method: 'PATCH',
       headers: {
         ...this.headers,
@@ -100,11 +146,7 @@ export class GitHubTracker implements IssueTracker {
     });
 
     if (!res.ok) {
-      const err: AgentError = {
-        code: 'TRACKER_ERROR',
-        message: `GitHub 이슈 상태 업데이트 실패: ${res.status} ${res.statusText}`,
-      };
-      throw err;
+      throw this.classifyHttpError(res.status, res.statusText, `GitHub 이슈 상태 업데이트 실패`);
     }
   }
 
@@ -119,14 +161,10 @@ export class GitHubTracker implements IssueTracker {
     }
 
     const url = `${this.baseUrl}/issues${params.toString() ? `?${params.toString()}` : ''}`;
-    const res = await fetch(url, { headers: this.headers });
+    const res = await this.safeFetch(url, { headers: this.headers });
 
     if (!res.ok) {
-      const err: AgentError = {
-        code: 'TRACKER_ERROR',
-        message: `GitHub 이슈 목록 조회 실패: ${res.status} ${res.statusText}`,
-      };
-      throw err;
+      throw this.classifyHttpError(res.status, res.statusText, `GitHub 이슈 목록 조회 실패`);
     }
 
     const issues = (await res.json()) as GitHubIssue[];

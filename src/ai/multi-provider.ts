@@ -1,4 +1,8 @@
-import { AIProvider } from './types.js';
+import { AIProvider, FallbackChain } from './types.js';
+
+export interface FallbackChainConfig {
+  excludeProviders?: string[];
+}
 
 interface ProviderEntry {
   name: string;
@@ -49,4 +53,24 @@ export async function getAvailableProviders(): Promise<AIProvider[]> {
   }
 
   return providers;
+}
+
+/**
+ * primary 프로바이더를 기준으로 fallback 체인을 구성한다.
+ * 환경변수에 API 키가 설정된 프로바이더만 체인에 포함.
+ */
+export async function createFallbackChain(
+  primaryProvider: AIProvider,
+  config?: FallbackChainConfig,
+): Promise<FallbackChain> {
+  const exclude = new Set(config?.excludeProviders ?? []);
+  exclude.add(primaryProvider.name); // primary는 fallback에서 제외
+
+  const allProviders = await getAvailableProviders();
+  const fallbacks = allProviders.filter((p) => !exclude.has(p.name));
+
+  return {
+    primary: primaryProvider,
+    fallbacks,
+  };
 }
