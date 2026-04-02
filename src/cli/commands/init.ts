@@ -1,3 +1,5 @@
+import fs from 'fs/promises';
+import path from 'path';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
@@ -8,9 +10,67 @@ import type { JunFlowConfig } from '../../config/schema.js';
 import { handleCliError } from '../utils/error-handler.js';
 import { logger } from '../utils/logger.js';
 
+async function registerClaudeCodeHooks(): Promise<void> {
+  const homeDir = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '';
+  const settingsPath = path.join(homeDir, '.claude', 'settings.json');
+
+  let settings: Record<string, unknown> = {};
+  try {
+    const content = await fs.readFile(settingsPath, 'utf-8');
+    settings = JSON.parse(content) as Record<string, unknown>;
+  } catch {
+    // 파일이 없으면 새로 생성
+  }
+
+  // hooks 배열이 없으면 초기화
+  if (!settings['hooks'] || !Array.isArray(settings['hooks'])) {
+    settings['hooks'] = [];
+  }
+
+  const hooks = settings['hooks'] as Array<Record<string, unknown>>;
+
+  // junflow keyword-detector 훅이 이미 있는지 확인
+  const hookCommand = 'node node_modules/junflow/dist/hooks/keyword-detector.js';
+  const existing = hooks.find(
+    (h) => typeof h['command'] === 'string' && h['command'].includes('keyword-detector'),
+  );
+
+  if (existing) {
+    logger.info('keyword-detector 훅이 이미 등록되어 있습니다.');
+    return;
+  }
+
+  hooks.push({
+    event: 'UserPromptSubmit',
+    command: hookCommand,
+    description: 'JunFlow 자연어 라우팅 — 프롬프트에서 스킬을 자동 감지',
+  });
+
+  settings['hooks'] = hooks;
+
+  // 디렉토리 보장
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+  logger.success(`Claude Code 훅 등록 완료: ${settingsPath}`);
+}
+
 export const initCommand = new Command('init')
   .description('대화형 위저드로 junflow 설정을 초기화합니다')
-  .action(async () => {
+  .option('--hooks', 'Claude Code settings.json에 자연어 라우팅 훅을 등록합니다')
+  .action(async (options: { hooks?: boolean }) => {
+    // --hooks 전용 모드
+    if (options.hooks) {
+      const spinner = ora('Claude Code 훅 등록 중...').start();
+      try {
+        await registerClaudeCodeHooks();
+        spinner.stop();
+      } catch (err) {
+        spinner.stop();
+        handleCliError(err);
+      }
+      return;
+    }
+
     console.log(chalk.bold.cyan('\njunflow 초기화 위저드'));
     console.log(chalk.gray('설정 파일을 생성합니다. Enter를 눌러 기본값을 사용하세요.\n'));
 

@@ -5,10 +5,11 @@ import { loadConfig } from '../../config/loader.js';
 import { createAIProvider } from '../../ai/provider-factory.js';
 import { WorkflowRunner } from '../../teams/runner.js';
 import { PRESETS } from '../../teams/presets.js';
-import type { AgentContext, Agent } from '../../agents/types.js';
-import type { AgentFactory } from '../../teams/runner.js';
+import { createAgentFactory } from '../../teams/agent-factory.js';
+import type { AgentContext } from '../../agents/types.js';
 import { handleCliError } from '../utils/error-handler.js';
 import { logger } from '../utils/logger.js';
+import { formatWorkflowResult } from '../utils/workflow-renderer.js';
 
 function makeAgentLogger(verbose: boolean) {
   return {
@@ -17,48 +18,6 @@ function makeAgentLogger(verbose: boolean) {
     error: (msg: string) => console.error(`${chalk.red('✖')} ${msg}`),
     debug: (msg: string) => { if (verbose) console.log(chalk.dim(msg)); },
   };
-}
-
-function renderWorkflowResult(
-  workflowName: string,
-  steps: Array<{ stepId: string; description: string; success: boolean; durationMs: number; tokensUsed?: number; error?: string; optional?: boolean }>,
-  totalDurationMs: number,
-  success: boolean,
-): void {
-  const lines: string[] = [];
-  const width = 50;
-  const topBorder = '─'.repeat(width - workflowName.length - 4);
-  lines.push(chalk.cyan(`┌─ Team Workflow: ${workflowName} ${topBorder}┐`));
-
-  for (const step of steps) {
-    let icon: string;
-    let detail: string;
-
-    if (step.success) {
-      icon = chalk.green('✔');
-      const dur = `${(step.durationMs / 1000).toFixed(1)}s`;
-      const tok = step.tokensUsed ? `, ${step.tokensUsed} tokens` : '';
-      detail = chalk.dim(`(${dur}${tok})`);
-    } else if (step.error === 'Skipped' || step.error?.startsWith('Skipped:')) {
-      icon = chalk.yellow('⚠');
-      detail = chalk.dim('(skipped' + (step.optional ? ' - optional' : '') + ')');
-    } else {
-      icon = chalk.red('✖');
-      detail = chalk.dim(`(${step.error ?? 'failed'})`);
-    }
-
-    lines.push(chalk.cyan('│') + ` ${icon} ${chalk.bold(`[${step.stepId}]`)} ${step.description} ${detail}`);
-  }
-
-  lines.push(chalk.cyan('├' + '─'.repeat(width) + '┤'));
-
-  const totalSec = (totalDurationMs / 1000).toFixed(1);
-  const totalTokens = steps.reduce((sum, s) => sum + (s.tokensUsed ?? 0), 0);
-  const statusText = success ? chalk.green('success') : chalk.red('failed');
-  lines.push(chalk.cyan('│') + ` Total: ${totalSec}s | Tokens: ${totalTokens} | Status: ${statusText}`);
-  lines.push(chalk.cyan('└' + '─'.repeat(width) + '┘'));
-
-  console.log(lines.join('\n'));
 }
 
 export const teamCommand = new Command('team')
@@ -110,38 +69,8 @@ export const teamCommand = new Command('team')
     const agentLogger = makeAgentLogger(config.output.verbose);
     const context: AgentContext = { workingDir: cwd, config, logger: agentLogger };
 
-    // AgentFactory: 에이전트 이름 → 인스턴스 (synchronous factory requires require())
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    const agentFactory: AgentFactory = (agentName: string): Agent<unknown, unknown> | null => {
-      switch (agentName) {
-        case 'IssueAnalyzer': {
-          const { IssueAnalyzer } = require('../../agents/issue-analyzer.js') as typeof import('../../agents/issue-analyzer.js');
-          const { MockTracker } = require('../../trackers/mock.js') as typeof import('../../trackers/mock.js');
-          return new IssueAnalyzer(aiProvider, new MockTracker()) as Agent<unknown, unknown>;
-        }
-        case 'BranchNamer': {
-          const { BranchNamer } = require('../../agents/branch-namer.js') as typeof import('../../agents/branch-namer.js');
-          return new BranchNamer(aiProvider) as Agent<unknown, unknown>;
-        }
-        case 'CommitWriter': {
-          const { CommitWriter } = require('../../agents/commit-writer.js') as typeof import('../../agents/commit-writer.js');
-          return new CommitWriter(aiProvider) as Agent<unknown, unknown>;
-        }
-        case 'CodeReviewer': {
-          const { CodeReviewer } = require('../../agents/code-reviewer.js') as typeof import('../../agents/code-reviewer.js');
-          return new CodeReviewer(aiProvider) as Agent<unknown, unknown>;
-        }
-        default:
-          return null;
-      }
-    };
-    /* eslint-enable @typescript-eslint/no-require-imports */
-
+    const agentFactory = createAgentFactory(aiProvider);
     const runner = new WorkflowRunner(context, agentFactory);
-
-    // 각 스텝 진행 상황 출력 (스피너)
-    const stepDescriptions = new Map(workflow.steps.map((s) => [s.id, s.description]));
-    const stepOptional = new Map(workflow.steps.map((s) => [s.id, s.optional ?? false]));
 
     console.log(chalk.bold(`\n워크플로우 시작: ${chalk.cyan(workflow.name)}\n`));
 
@@ -155,14 +84,7 @@ export const teamCommand = new Command('team')
     }
     spinner.stop();
 
-    // 결과 렌더링
-    const stepDisplayInfo = result.steps.map((s) => ({
-      ...s,
-      description: stepDescriptions.get(s.stepId) ?? s.agentName,
-      optional: stepOptional.get(s.stepId) ?? false,
-    }));
-
-    renderWorkflowResult(workflow.name, stepDisplayInfo, result.totalDurationMs, result.success);
+    formatWorkflowResult(workflow, result);
 
     if (!result.success) {
       process.exit(1);

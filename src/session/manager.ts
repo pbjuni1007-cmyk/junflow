@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import type { Session, AgentCallRecord, SessionSummary } from './types.js';
+import type { Session, AgentCallRecord, SessionSummary, WorkflowState, WorkflowStepStatus } from './types.js';
 
 const SESSIONS_DIR = '.junflow/sessions';
 const CURRENT_SESSION_FILE = '.junflow/current-session.json';
@@ -145,6 +145,63 @@ export class SessionManager {
     } catch {
       return null;
     }
+  }
+
+  async startWorkflow(workflowName: string, mode: string, stepIds: string[]): Promise<void> {
+    const session = this.session ?? await this.getCurrent();
+    if (!session) return;
+
+    session.workflowState = {
+      workflowName,
+      mode,
+      phase: 'running',
+      steps: stepIds.map((id) => ({ stepId: id, status: 'pending' as WorkflowStepStatus })),
+      resumable: false,
+    };
+
+    this.session = session;
+    await this._persist(session.workingDir);
+  }
+
+  async recordWorkflowStep(
+    stepId: string,
+    status: WorkflowStepStatus,
+    result?: unknown,
+  ): Promise<void> {
+    const session = this.session ?? await this.getCurrent();
+    if (!session?.workflowState) return;
+
+    const step = session.workflowState.steps.find((s) => s.stepId === stepId);
+    if (!step) return;
+
+    step.status = status;
+
+    if (status === 'running' && !step.startedAt) {
+      step.startedAt = new Date().toISOString();
+    }
+
+    if (status === 'completed' || status === 'failed' || status === 'skipped') {
+      step.completedAt = new Date().toISOString();
+      if (result !== undefined) {
+        step.result = result;
+      }
+    }
+
+    // 전체 워크플로우 phase 업데이트
+    const allDone = session.workflowState.steps.every(
+      (s) => s.status === 'completed' || s.status === 'failed' || s.status === 'skipped',
+    );
+    if (allDone) {
+      const anyFailed = session.workflowState.steps.some((s) => s.status === 'failed');
+      session.workflowState.phase = anyFailed ? 'failed' : 'completed';
+    }
+
+    this.session = session;
+    await this._persist(session.workingDir);
+  }
+
+  getWorkflowState(): WorkflowState | undefined {
+    return this.session?.workflowState;
   }
 
   async getLastIssue(): Promise<Session['issue'] | null> {

@@ -1,6 +1,6 @@
 {
   "name": "junflow",
-  "version": "0.3.1",
+  "version": "0.5.0",
   "description": "AI-powered developer workflow CLI tool",
   "type": "module",
   "bin": {

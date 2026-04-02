@@ -72,8 +72,49 @@ export const deepReviewWorkflow: TeamWorkflow = {
   ],
 };
 
+// 오토파일럿 플로우: 이슈 분석 → 브랜치 → 커밋 → 리뷰 → 검증 전체 사이클
+export const autopilotWorkflow: TeamWorkflow = {
+  name: 'autopilot',
+  description: '이슈 분석 → 브랜치 → 커밋 → 리뷰 → 검증 전체 사이클',
+  steps: [
+    {
+      id: 'analyze',
+      agentName: 'IssueAnalyzer',
+      description: '이슈 분석',
+    },
+    {
+      id: 'branch',
+      agentName: 'BranchNamer',
+      description: '브랜치 생성',
+      dependsOn: ['analyze'],
+      inputMapping: { analysis: 'analyze.data' },
+    },
+    {
+      id: 'commit',
+      agentName: 'CommitWriter',
+      description: '커밋 메시지 생성',
+      dependsOn: ['branch'],
+    },
+    {
+      id: 'review',
+      agentName: 'CodeReviewer',
+      description: '코드 리뷰',
+      dependsOn: ['commit'],
+      optional: true,
+    },
+    {
+      id: 'verify',
+      agentName: 'Verifier',
+      description: '품질 검증',
+      dependsOn: ['review'],
+      optional: true,
+    },
+  ],
+};
+
 export const PRESETS: Record<string, TeamWorkflow> = {
   'full-dev': fullDevWorkflow,
   'quick-commit': quickCommitWorkflow,
   'deep-review': deepReviewWorkflow,
+  'autopilot': autopilotWorkflow,
 };

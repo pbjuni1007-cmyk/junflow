@@ -12,6 +12,7 @@ import { sessionCommand } from './commands/session.js';
 import { hooksCommand } from './commands/hooks.js';
 import { teamCommand } from './commands/team.js';
 import { reviewDocCommand } from './commands/review-doc.js';
+import { autopilotCommand } from './commands/autopilot.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../../package.json') as { version: string; description: string };
@@ -33,5 +34,6 @@ program.addCommand(sessionCommand);
 program.addCommand(hooksCommand);
 program.addCommand(teamCommand);
 program.addCommand(reviewDocCommand);
+program.addCommand(autopilotCommand);
 
 program.parse(process.argv);

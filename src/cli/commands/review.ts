@@ -7,6 +7,7 @@ import simpleGit from 'simple-git';
 import { loadConfig } from '../../config/loader.js';
 import { ensureGitRepo, getStagedDiff } from '../../git/operations.js';
 import { CodeReviewer, CodeReviewResult, ReviewFinding, codeReviewResultSchema } from '../../agents/code-reviewer.js';
+import { DeepCodeReviewer } from '../../agents/deep-code-reviewer.js';
 import { ClaudeProvider } from '../../ai/claude.js';
 import { getAvailableProviders } from '../../ai/multi-provider.js';
 import { ConsensusRunner } from '../../ai/consensus.js';
@@ -16,6 +17,13 @@ import { handleCliError, cliErrors } from '../utils/error-handler.js';
 import { logger } from '../utils/logger.js';
 import { sessionManager } from '../../session/index.js';
 import { HookRunner } from '../../hooks/runner.js';
+import { WorkflowRunner } from '../../teams/runner.js';
+import { deepReviewWorkflow } from '../../teams/presets.js';
+import { createAgentFactory } from '../../teams/agent-factory.js';
+import { formatWorkflowResult } from '../utils/workflow-renderer.js';
+import { resolveCiOptions, type CiOptions } from '../options/ci-mode.js';
+import { printJson, type JsonReviewOutput } from '../formatters/json.js';
+import { formatReviewComment } from '../formatters/index.js';
 
 const SEVERITY_ORDER: ReviewFinding['severity'][] = ['critical', 'warning', 'suggestion', 'praise'];
 
@@ -88,7 +96,13 @@ export const reviewCommand = new Command('review')
   .option('-b, --base <branch>', '비교 대상 브랜치', 'main')
   .option('--consensus', '멀티모델 합의 (사용 가능한 모든 AI 모델로 리뷰 후 합성)')
   .option('--verify', '자동 검증 루프 (품질 미달 시 재생성)')
-  .action(async (options: { staged?: boolean; focus?: string[]; base: string; consensus?: boolean; verify?: boolean }) => {
+  .option('--workflow', 'DAG 워크플로우 모드 (보안/성능/가독성 병렬 리뷰)')
+  .option('--deep', '멀티모델 합의 기반 심층 리뷰 (DeepCodeReviewer)')
+  .option('--ci', 'CI 모드 (interactive 프롬프트 비활성화)')
+  .option('--output <format>', '출력 포맷 (text, json)', 'text')
+  .option('--format <type>', '코멘트 포맷 (github-pr, gitlab-mr, plain)', 'plain')
+  .action(async (options: { staged?: boolean; focus?: string[]; base: string; consensus?: boolean; verify?: boolean; workflow?: boolean; deep?: boolean } & Partial<CiOptions>) => {
+    const ciOpts = resolveCiOptions(options);
     const cwd = process.cwd();
 
     try {
@@ -161,7 +175,81 @@ export const reviewCommand = new Command('review')
 
     const agentContext = { workingDir: cwd, config, logger: agentLogger };
     const agentInput = { diff, issueAnalysis, focusAreas };
+
+    if (options.workflow) {
+      // 워크플로우 모드: deepReviewWorkflow 프리셋으로 3관점 병렬 리뷰
+      spinner.text = '워크플로우 리뷰 중 (보안/성능/가독성 병렬)...';
+      const agentFactory = createAgentFactory(aiProvider);
+      const runner = new WorkflowRunner(agentContext, agentFactory);
+
+      let workflowResult;
+      try {
+        workflowResult = await runner.execute(deepReviewWorkflow);
+      } catch (err) {
+        spinner.stop();
+        handleCliError(err);
+      }
+      spinner.stop();
+
+      formatWorkflowResult(deepReviewWorkflow, workflowResult);
+
+      await sessionManager.recordAgentCall({
+        agentName: 'WorkflowRunner:deep-review',
+        command: 'review --workflow',
+        timestamp: new Date().toISOString(),
+        durationMs: workflowResult.totalDurationMs,
+        tokensUsed: workflowResult.steps.reduce((sum, s) => sum + (s.tokensUsed ?? 0), 0),
+        success: workflowResult.success,
+      }).catch(() => {});
+
+      // post-review 훅 실행
+      try {
+        await hookRunner.run('post-review');
+      } catch (err) {
+        handleCliError(err);
+      }
+
+      if (!workflowResult.success) {
+        process.exit(1);
+      }
+      return;
+    }
+
     let reviewData: CodeReviewResult;
+
+    if (options.deep) {
+      // Deep 모드: DeepCodeReviewer로 멀티프로바이더 합의 리뷰
+      spinner.text = '멀티모델 합의 심층 리뷰 중...';
+      const deepReviewer = new DeepCodeReviewer(aiProvider);
+
+      const result = await deepReviewer.execute(agentInput, agentContext);
+      spinner.stop();
+
+      if (!result.success) {
+        handleCliError(result.error);
+      }
+
+      reviewData = result.data;
+
+      const meta = (result as { data: CodeReviewResult; metadata: { durationMs: number; tokensUsed?: number }; success: true }).metadata;
+      await sessionManager.recordAgentCall({
+        agentName: 'DeepCodeReviewer',
+        command: 'review --deep',
+        timestamp: new Date().toISOString(),
+        durationMs: meta.durationMs,
+        tokensUsed: meta.tokensUsed,
+        success: result.success,
+      }).catch(() => {});
+
+      printReviewResult(reviewData);
+
+      try {
+        await hookRunner.run('post-review');
+      } catch (err) {
+        handleCliError(err);
+      }
+      return;
+    }
 
     if (options.consensus) {
       // 멀티모델 합의 모드
@@ -282,7 +370,20 @@ export const reviewCommand = new Command('review')
       }).catch(() => {});
     }
 
-    printReviewResult(reviewData);
+    // CI 출력 모드 분기
+    if (ciOpts.output === 'json') {
+      const jsonOut: JsonReviewOutput = {
+        type: 'review',
+        success: true,
+        data: reviewData,
+        metadata: { mode: options.deep ? 'deep' : options.consensus ? 'consensus' : options.verify ? 'verify' : 'default' },
+      };
+      printJson(jsonOut);
+    } else if (ciOpts.format !== 'plain') {
+      console.log(formatReviewComment(reviewData, ciOpts.format));
+    } else {
+      printReviewResult(reviewData);
+    }
 
     // post-review 훅 실행
     try {

@@ -13,6 +13,12 @@ import { HookRunner } from '../../../hooks/runner.js';
 import { loadCurrentIssue, renderSuggestions } from './rendering.js';
 import { selectMessage } from './interaction.js';
 import { generateConsensus, generateWithVerify, generateDefault } from './generators.js';
+import { WorkflowRunner } from '../../../teams/runner.js';
+import { quickCommitWorkflow } from '../../../teams/presets.js';
+import { createAgentFactory } from '../../../teams/agent-factory.js';
+import { formatWorkflowResult } from '../../utils/workflow-renderer.js';
+import { resolveCiOptions, type CiOptions } from '../../options/ci-mode.js';
+import { printJson, type JsonCommitOutput } from '../../formatters/json.js';
 
 export const commitCommand = new Command('commit')
   .description('AI 기반 커밋 메시지 생성')
@@ -23,6 +29,9 @@ export const commitCommand = new Command('commit')
   .option('--dry-run', '메시지만 출력, 커밋하지 않음')
   .option('--consensus', '멀티모델 합의 (사용 가능한 모든 AI 모델로 생성 후 합성)')
   .option('--verify', '자동 검증 루프 (품질 미달 시 재생성)')
+  .option('--workflow', 'DAG 워크플로우 모드 (커밋 생성 + 자동 리뷰)')
+  .option('--ci', 'CI 모드 (interactive 프롬프트 비활성화, 첫 번째 추천 자동 사용)')
+  .option('--output <format>', '출력 포맷 (text, json)', 'text')
   .action(async (options: {
     all?: boolean;
     lang?: string;
@@ -31,7 +40,9 @@ export const commitCommand = new Command('commit')
     dryRun?: boolean;
     consensus?: boolean;
     verify?: boolean;
-  }) => {
+    workflow?: boolean;
+  } & Partial<CiOptions>) => {
+    const ciOpts = resolveCiOptions(options);
     const cwd = process.cwd();
 
     // 0. pre-commit 훅 실행
@@ -91,6 +102,39 @@ export const commitCommand = new Command('commit')
     const aiProvider = new ClaudeProvider(apiKey!);
     const agent = new CommitWriter(aiProvider);
     const agentContext = { workingDir: cwd, config, logger: makeCommitAgentLogger() };
+
+    // --workflow: 워크플로우 모드 (커밋 + 리뷰 자동 연결)
+    if (options.workflow) {
+      const agentFactory = createAgentFactory(aiProvider!);
+      const runner = new WorkflowRunner(agentContext, agentFactory);
+
+      console.log(chalk.bold(`\n워크플로우 모드: ${chalk.cyan('quick-commit')}\n`));
+
+      const wfSpinner = (await import('ora')).default('워크플로우 실행 중...').start();
+      let workflowResult;
+      try {
+        workflowResult = await runner.execute(quickCommitWorkflow);
+      } catch (err) {
+        wfSpinner.fail('워크플로우 실행 실패');
+        handleCliError(err);
+      }
+      wfSpinner.stop();
+
+      formatWorkflowResult(quickCommitWorkflow, workflowResult);
+
+      // post-commit 훅 실행
+      try {
+        await hookRunner.run('post-commit');
+      } catch (err) {
+        handleCliError(err);
+      }
+
+      if (!workflowResult.success) {
+        process.exit(1);
+      }
+      return;
+    }
+
     const agentInput = {
       diff,
       issueAnalysis,
@@ -121,8 +165,8 @@ export const commitCommand = new Command('commit')
       }),
     );
 
-    // 9. 메시지 선택
-    const selectedMessage = await selectMessage(candidates, !!options.auto);
+    // 9. 메시지 선택 (CI 모드에서는 자동 선택)
+    const selectedMessage = await selectMessage(candidates, !!options.auto || ciOpts.ci);
 
     // 10. --dry-run 이면 출력만
     if (options.dryRun) {
@@ -142,7 +186,22 @@ export const commitCommand = new Command('commit')
       handleCliError(err);
     }
 
-    // 12. post-commit 훅 실행
+    // 12. JSON 출력 (CI 모드)
+    if (ciOpts.output === 'json') {
+      const jsonOut: JsonCommitOutput = {
+        type: 'commit',
+        success: true,
+        data: {
+          message: selectedMessage,
+          alternatives: candidates.filter((c) => c !== selectedMessage),
+          hash: commitHash,
+        },
+        metadata: { mode: options.consensus ? 'consensus' : options.verify ? 'verify' : 'default' },
+      };
+      printJson(jsonOut);
+    }
+
+    // 13. post-commit 훅 실행
     try {
       await hookRunner.run('post-commit', {
         JUNFLOW_COMMIT_HASH: commitHash ?? '',

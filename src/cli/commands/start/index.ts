@@ -19,6 +19,10 @@ import { renderAnalysisBox } from './rendering.js';
 import { selectBranch, createBranchIfNeeded } from './interaction.js';
 import { recordAgentResult } from './session-tracking.js';
 import { runDecomposition, saveIssueState } from './decomposition.js';
+import { WorkflowRunner } from '../../../teams/runner.js';
+import { fullDevWorkflow } from '../../../teams/presets.js';
+import { createAgentFactory } from '../../../teams/agent-factory.js';
+import { formatWorkflowResult } from '../../utils/workflow-renderer.js';
 
 export const startCommand = new Command('start')
   .description('이슈 기반 개발 시작')
@@ -27,11 +31,13 @@ export const startCommand = new Command('start')
   .option('--no-branch', '브랜치 생성 건너뛰기')
   .option('--dry-run', '실제 실행 없이 결과만 표시')
   .option('--decompose', '이슈를 서브태스크로 분해')
+  .option('--full', '워크플로우 모드 (분석→브랜치→리뷰 자동 실행)')
   .action(async (issueId: string, options: {
     tracker?: string;
     branch?: boolean;
     dryRun?: boolean;
     decompose?: boolean;
+    full?: boolean;
   }) => {
     const cwd = process.cwd();
 
@@ -81,6 +87,38 @@ export const startCommand = new Command('start')
 
     const agentLogger = makeAgentLogger(config.output.verbose);
     const context: AgentContext = { workingDir: cwd, config, logger: agentLogger };
+
+    // --full: 워크플로우 모드로 전체 플로우 실행
+    if (options.full) {
+      const agentFactory = createAgentFactory(aiProvider);
+      const runner = new WorkflowRunner(context, agentFactory);
+
+      console.log(chalk.bold(`\n워크플로우 모드: ${chalk.cyan('full-dev')}\n`));
+
+      const wfSpinner = ora('워크플로우 실행 중...').start();
+      let workflowResult;
+      try {
+        workflowResult = await runner.execute(fullDevWorkflow);
+      } catch (err) {
+        wfSpinner.fail('워크플로우 실행 실패');
+        handleCliError(err);
+      }
+      wfSpinner.stop();
+
+      formatWorkflowResult(fullDevWorkflow, workflowResult);
+
+      // post-start 훅 실행
+      try {
+        await hookRunner.run('post-start', { JUNFLOW_ISSUE_ID: issueId });
+      } catch (err) {
+        handleCliError(err);
+      }
+
+      if (!workflowResult.success) {
+        process.exit(1);
+      }
+      return;
+    }
 
     // 5. IssueAnalyzer 실행
     const analyzeSpinner = ora(`이슈 ${issueId} 분석 중...`).start();

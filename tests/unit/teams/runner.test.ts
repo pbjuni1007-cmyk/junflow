@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WorkflowRunner } from '../../../src/teams/runner.js';
 import type { AgentFactory } from '../../../src/teams/runner.js';
-import type { TeamWorkflow } from '../../../src/teams/types.js';
+import type { TeamWorkflow, StepStatus } from '../../../src/teams/types.js';
 import type { AgentContext, Agent, AgentResult } from '../../../src/agents/types.js';
 
 function makeContext(): AgentContext {
@@ -543,6 +543,267 @@ describe('WorkflowRunner', () => {
 
       expect(ids.indexOf('a')).toBeLessThan(ids.indexOf('b'));
       expect(ids.indexOf('b')).toBeLessThan(ids.indexOf('c'));
+    });
+  });
+
+  // === Phase 3: onProgress, AbortController, maxRetries ===
+
+  describe('onProgress 콜백', () => {
+    it('각 스텝의 running → completed 상태를 콜백으로 전달한다', async () => {
+      const factory: AgentFactory = (name) => makeSuccessAgent(name, { ok: true });
+      const progress: Array<{ stepId: string; status: StepStatus }> = [];
+
+      const workflow: TeamWorkflow = {
+        name: 'progress-test',
+        description: 'progress',
+        steps: [
+          { id: 'a', agentName: 'AgentA', description: 'A' },
+          { id: 'b', agentName: 'AgentB', description: 'B', dependsOn: ['a'] },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      await runner.execute(workflow, {
+        onProgress: (id, s) => progress.push({ stepId: id, status: s }),
+      });
+
+      expect(progress.some((p) => p.stepId === 'a' && p.status === 'running')).toBe(true);
+      expect(progress.some((p) => p.stepId === 'a' && p.status === 'completed')).toBe(true);
+      expect(progress.some((p) => p.stepId === 'b' && p.status === 'running')).toBe(true);
+      expect(progress.some((p) => p.stepId === 'b' && p.status === 'completed')).toBe(true);
+    });
+
+    it('실패 시 failed 상태를 전달한다', async () => {
+      const factory: AgentFactory = (name) => makeFailAgent(name);
+      const progress: StepStatus[] = [];
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      await runner.execute(
+        { name: 't', description: 't', steps: [{ id: 'x', agentName: 'A', description: 'X' }] },
+        { onProgress: (_id, s) => progress.push(s) },
+      );
+
+      expect(progress).toContain('failed');
+    });
+
+    it('스킵 시 skipped 상태를 전달한다', async () => {
+      const factory: AgentFactory = (name) => {
+        if (name === 'AgentA') return makeFailAgent(name);
+        return makeSuccessAgent(name, {});
+      };
+      const progress: Array<{ stepId: string; status: StepStatus }> = [];
+
+      const workflow: TeamWorkflow = {
+        name: 'skip-test',
+        description: 'skip',
+        steps: [
+          { id: 'a', agentName: 'AgentA', description: 'A' },
+          { id: 'b', agentName: 'AgentB', description: 'B', dependsOn: ['a'] },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      await runner.execute(workflow, {
+        onProgress: (id, s) => progress.push({ stepId: id, status: s }),
+      });
+
+      expect(progress.some((p) => p.stepId === 'b' && p.status === 'skipped')).toBe(true);
+    });
+  });
+
+  describe('AbortController', () => {
+    it('이미 abort된 signal로 실행하면 즉시 종료한다', async () => {
+      const factory: AgentFactory = (name) => makeSuccessAgent(name, {});
+      const ac = new AbortController();
+      ac.abort();
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute(
+        { name: 'a', description: 'a', steps: [{ id: 'x', agentName: 'A', description: 'A' }] },
+        { signal: ac.signal },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.steps.every((s) => s.error === 'Aborted')).toBe(true);
+    });
+
+    it('실행 중 abort 시 남은 스텝을 skip한다', async () => {
+      const ac = new AbortController();
+
+      const factory: AgentFactory = (name) => ({
+        name,
+        description: '',
+        execute: vi.fn().mockImplementation(async () => {
+          if (name === 'AgentA') ac.abort();
+          return {
+            success: true,
+            data: {},
+            metadata: { agentName: name, durationMs: 10, tokensUsed: 50 },
+          };
+        }),
+      });
+
+      const workflow: TeamWorkflow = {
+        name: 'abort-mid',
+        description: 'abort',
+        steps: [
+          { id: 'a', agentName: 'AgentA', description: 'A' },
+          { id: 'b', agentName: 'AgentB', description: 'B', dependsOn: ['a'] },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute(workflow, { signal: ac.signal });
+
+      const stepB = result.steps.find((s) => s.stepId === 'b');
+      expect(stepB?.error).toBeDefined();
+    });
+  });
+
+  describe('maxRetries', () => {
+    it('실패한 스텝을 재시도하여 성공시킨다', async () => {
+      let callCount = 0;
+      const factory: AgentFactory = () => ({
+        name: 'Retry',
+        description: '',
+        execute: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount < 3) {
+            return {
+              success: false,
+              error: { code: 'AI_ERROR', message: 'transient' },
+              metadata: { agentName: 'Retry', durationMs: 5 },
+            };
+          }
+          return {
+            success: true,
+            data: { ok: true },
+            metadata: { agentName: 'Retry', durationMs: 5, tokensUsed: 10 },
+          };
+        }),
+      });
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute(
+        { name: 'r', description: 'r', steps: [{ id: 'x', agentName: 'Retry', description: 'X' }] },
+        { maxRetries: 3 },
+      );
+
+      expect(result.success).toBe(true);
+    });
+
+    it('재시도 횟수 초과 시 실패한다', async () => {
+      const factory: AgentFactory = (name) => makeFailAgent(name);
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute(
+        { name: 'f', description: 'f', steps: [{ id: 'x', agentName: 'F', description: 'X' }] },
+        { maxRetries: 2 },
+      );
+
+      expect(result.success).toBe(false);
+    });
+
+    it('재시도 시 retrying 상태를 onProgress로 전달한다', async () => {
+      let callCount = 0;
+      const factory: AgentFactory = () => ({
+        name: 'R',
+        description: '',
+        execute: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount < 2) {
+            return {
+              success: false,
+              error: { code: 'AI_ERROR', message: 'fail' },
+              metadata: { agentName: 'R', durationMs: 5 },
+            };
+          }
+          return {
+            success: true,
+            data: {},
+            metadata: { agentName: 'R', durationMs: 5, tokensUsed: 10 },
+          };
+        }),
+      });
+
+      const statuses: StepStatus[] = [];
+      const runner = new WorkflowRunner(makeContext(), factory);
+      await runner.execute(
+        { name: 'r', description: 'r', steps: [{ id: 'x', agentName: 'R', description: 'X' }] },
+        { maxRetries: 2, onProgress: (_id, s) => statuses.push(s) },
+      );
+
+      expect(statuses).toContain('retrying');
+    });
+
+    it('의존성 실패로 인한 skip은 재시도하지 않는다', async () => {
+      const executeCounts: Record<string, number> = { A: 0, B: 0 };
+      const factory: AgentFactory = (name) => ({
+        name,
+        description: '',
+        execute: vi.fn().mockImplementation(async () => {
+          executeCounts[name] = (executeCounts[name] ?? 0) + 1;
+          if (name === 'A') {
+            return {
+              success: false,
+              error: { code: 'AI_ERROR', message: 'fail' },
+              metadata: { agentName: name, durationMs: 5 },
+            };
+          }
+          return {
+            success: true,
+            data: {},
+            metadata: { agentName: name, durationMs: 5, tokensUsed: 10 },
+          };
+        }),
+      });
+
+      const workflow: TeamWorkflow = {
+        name: 'no-retry-skip',
+        description: 'skip',
+        steps: [
+          { id: 'a', agentName: 'A', description: 'A' },
+          { id: 'b', agentName: 'B', description: 'B', dependsOn: ['a'] },
+        ],
+      };
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      await runner.execute(workflow, { maxRetries: 3 });
+
+      // B should never execute (dependency skip doesn't retry)
+      expect(executeCounts['B']).toBe(0);
+    });
+  });
+
+  describe('CLI 워커 통합', () => {
+    it('CliWorkerConfig를 팩토리가 반환하면 CLI 워커로 실행한다', async () => {
+      // CliRunner를 mock
+      vi.doMock('../../../src/orchestrator/cli-runner.js', () => ({
+        CliRunner: class {
+          spawn = vi.fn().mockResolvedValue({
+            cli: 'codex',
+            output: 'cli review output',
+            exitCode: 0,
+            durationMs: 100,
+            timedOut: false,
+          });
+        },
+      }));
+
+      const factory: AgentFactory = () => ({
+        type: 'cli-worker' as const,
+        cli: 'codex' as const,
+        prompt: 'review this code',
+      });
+
+      const runner = new WorkflowRunner(makeContext(), factory);
+      const result = await runner.execute({
+        name: 'cli-test',
+        description: 'cli',
+        steps: [{ id: 'c', agentName: 'CliWorker:codex', description: 'CLI Review' }],
+      });
+
+      expect(result.steps[0]?.data).toBe('cli review output');
     });
   });
 });

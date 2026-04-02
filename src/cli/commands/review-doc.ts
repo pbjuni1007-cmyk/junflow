@@ -15,6 +15,10 @@ import { trackTokenUsage } from '../utils/token-tracker.js';
 import { handleCliError, cliErrors } from '../utils/error-handler.js';
 import { logger } from '../utils/logger.js';
 import { sessionManager } from '../../session/index.js';
+import { resolveCiOptions, type CiOptions } from '../options/ci-mode.js';
+import { printJson, type JsonDocReviewOutput } from '../formatters/json.js';
+import { formatDocReviewAsGitHubPR } from '../formatters/markdown.js';
+import { formatDocReviewAsGitLabMR } from '../formatters/gitlab.js';
 
 const SEVERITY_COLORS: Record<DocumentFinding['severity'], (s: string) => string> = {
   critical: chalk.red.bold,
@@ -171,7 +175,11 @@ export const reviewDocCommand = new Command('review-doc')
   .option('-f, --focus <areas...>', '집중 영역 (feasibility, completeness, technical, market)')
   .option('--consensus', '멀티모델 합의 (사용 가능한 모든 AI 모델로 리뷰 후 합성)')
   .option('--verify', '자동 검증 루프 (품질 미달 시 재생성)')
-  .action(async (filePath: string, options: { deep?: boolean; focus?: string[]; consensus?: boolean; verify?: boolean }) => {
+  .option('--ci', 'CI 모드 (interactive 프롬프트 비활성화)')
+  .option('--output <format>', '출력 포맷 (text, json)', 'text')
+  .option('--format <type>', '코멘트 포맷 (github-pr, gitlab-mr, plain)', 'plain')
+  .action(async (filePath: string, options: { deep?: boolean; focus?: string[]; consensus?: boolean; verify?: boolean } & Partial<CiOptions>) => {
+    const ciOpts = resolveCiOptions(options);
     // 1. 파일 읽기
     let content: string;
     try {
@@ -328,13 +336,34 @@ export const reviewDocCommand = new Command('review-doc')
         success: reviewResult.success,
       }).catch(() => {});
     }
-    printDocumentReview(
-      review.summary,
-      review.overallScore,
-      review.findings,
-      review.missingTopics,
-      review.keyQuestions,
-    );
+    // CI 출력 모드 분기
+    if (ciOpts.output === 'json') {
+      const jsonOut: JsonDocReviewOutput = {
+        type: 'review-doc',
+        success: true,
+        data: {
+          summary: review.summary,
+          overallScore: review.overallScore,
+          findings: review.findings,
+          missingTopics: review.missingTopics,
+          keyQuestions: review.keyQuestions,
+        },
+        metadata: { mode: options.consensus ? 'consensus' : options.verify ? 'verify' : 'default' },
+      };
+      printJson(jsonOut);
+    } else if (ciOpts.format === 'github-pr') {
+      console.log(formatDocReviewAsGitHubPR(review.summary, review.overallScore, review.findings, review.missingTopics, review.keyQuestions));
+    } else if (ciOpts.format === 'gitlab-mr') {
+      console.log(formatDocReviewAsGitLabMR(review.summary, review.overallScore, review.findings, review.missingTopics, review.keyQuestions));
+    } else {
+      printDocumentReview(
+        review.summary,
+        review.overallScore,
+        review.findings,
+        review.missingTopics,
+        review.keyQuestions,
+      );
+    }
 
     // 4. Deep Research (--deep 옵션)
     if (options.deep) {

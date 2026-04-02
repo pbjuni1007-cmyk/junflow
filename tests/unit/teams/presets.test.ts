@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PRESETS, fullDevWorkflow, quickCommitWorkflow, deepReviewWorkflow } from '../../../src/teams/presets.js';
+import { PRESETS, fullDevWorkflow, quickCommitWorkflow, deepReviewWorkflow, autopilotWorkflow } from '../../../src/teams/presets.js';
 import type { TeamWorkflow } from '../../../src/teams/types.js';
 
 function getAllStepIds(workflow: TeamWorkflow): Set<string> {
@@ -42,10 +42,11 @@ function hasCycle(workflow: TeamWorkflow): boolean {
 }
 
 describe('PRESETS', () => {
-  it('full-dev, quick-commit, deep-review 세 프리셋이 존재한다', () => {
+  it('full-dev, quick-commit, deep-review, autopilot 네 프리셋이 존재한다', () => {
     expect(PRESETS).toHaveProperty('full-dev');
     expect(PRESETS).toHaveProperty('quick-commit');
     expect(PRESETS).toHaveProperty('deep-review');
+    expect(PRESETS).toHaveProperty('autopilot');
   });
 
   it('각 프리셋은 name, description, steps 필드를 갖는다', () => {
@@ -100,6 +101,10 @@ describe('순환 참조 없음', () => {
 
   it('deep-review 워크플로우에 순환 참조가 없다', () => {
     expect(hasCycle(deepReviewWorkflow)).toBe(false);
+  });
+
+  it('autopilot 워크플로우에 순환 참조가 없다', () => {
+    expect(hasCycle(autopilotWorkflow)).toBe(false);
   });
 
   it('모든 프리셋에 순환 참조가 없다', () => {
@@ -157,5 +162,38 @@ describe('deep-review 프리셋 구조', () => {
     for (const step of deepReviewWorkflow.steps) {
       expect(!step.dependsOn || step.dependsOn.length === 0).toBe(true);
     }
+  });
+});
+
+describe('autopilot 프리셋 구조', () => {
+  it('analyze → branch → commit → review → verify 순서로 스텝이 정의된다', () => {
+    const ids = autopilotWorkflow.steps.map((s) => s.id);
+    expect(ids).toEqual(['analyze', 'branch', 'commit', 'review', 'verify']);
+  });
+
+  it('branch는 analyze에 의존한다', () => {
+    const branch = autopilotWorkflow.steps.find((s) => s.id === 'branch');
+    expect(branch?.dependsOn).toContain('analyze');
+  });
+
+  it('commit은 branch에 의존한다', () => {
+    const commit = autopilotWorkflow.steps.find((s) => s.id === 'commit');
+    expect(commit?.dependsOn).toContain('branch');
+  });
+
+  it('review는 commit에 의존하고 optional이다', () => {
+    const review = autopilotWorkflow.steps.find((s) => s.id === 'review');
+    expect(review?.dependsOn).toContain('commit');
+    expect(review?.optional).toBe(true);
+  });
+
+  it('verify는 review에 의존하고 optional이다', () => {
+    const verify = autopilotWorkflow.steps.find((s) => s.id === 'verify');
+    expect(verify?.dependsOn).toContain('review');
+    expect(verify?.optional).toBe(true);
+  });
+
+  it('순환 참조가 없다', () => {
+    expect(hasCycle(autopilotWorkflow)).toBe(false);
   });
 });

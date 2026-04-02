@@ -1,0 +1,12 @@
+{
+  "rules": [
+    { "pattern": "커밋|commit message|커밋 메시지", "skill": "junflow-commit", "priority": 10 },
+    { "pattern": "리뷰|review|코드 봐|코드 확인", "skill": "junflow-review", "priority": 10 },
+    { "pattern": "시작|start|이슈 분석|브랜치", "skill": "junflow-start", "priority": 10 },
+    { "pattern": "상태|status|현황|토큰", "skill": "junflow-status", "priority": 10 },
+    { "pattern": "계획|plan|플랜|태스크 분해|작업 분해", "skill": "junflow-plan", "priority": 10 },
+    { "pattern": "꼼꼼히 리뷰|deep review|심층 리뷰|제대로 봐|깊이 리뷰", "skill": "junflow-deep-review", "priority": 20 },
+    { "pattern": "꼼꼼히 커밋|deep commit|합의 커밋|심층 커밋", "skill": "junflow-deep-commit", "priority": 20 },
+    { "pattern": "autopilot|오토파일럿|전체 사이클|처음부터 끝까지", "skill": "junflow-autopilot", "priority": 30 }
+  ]
+}

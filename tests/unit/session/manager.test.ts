@@ -278,3 +278,101 @@ describe('SessionManager.getLastIssue', () => {
     expect(current!.issue!.id).toBe('TEST-1');
   });
 });
+
+describe('SessionManager.startWorkflow', () => {
+  it('워크플로우 상태를 세션에 초기화한다', async () => {
+    await manager.start(tmpDir);
+    await manager.startWorkflow('test-wf', 'autopilot', ['s1', 's2', 's3']);
+
+    const state = manager.getWorkflowState();
+    expect(state).toBeDefined();
+    expect(state!.workflowName).toBe('test-wf');
+    expect(state!.mode).toBe('autopilot');
+    expect(state!.phase).toBe('running');
+    expect(state!.steps).toHaveLength(3);
+    expect(state!.steps[0]!.stepId).toBe('s1');
+    expect(state!.steps[0]!.status).toBe('pending');
+    expect(state!.steps[1]!.stepId).toBe('s2');
+    expect(state!.steps[1]!.status).toBe('pending');
+    expect(state!.steps[2]!.stepId).toBe('s3');
+    expect(state!.steps[2]!.status).toBe('pending');
+  });
+
+  it('세션이 없으면 에러 없이 무시한다', async () => {
+    // 세션을 시작하지 않고 startWorkflow 호출
+    const freshManager = new SessionManager();
+    await expect(
+      freshManager.startWorkflow('test-wf', 'autopilot', ['s1', 's2']),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('SessionManager.recordWorkflowStep', () => {
+  it('스텝 상태를 running으로 업데이트한다', async () => {
+    await manager.start(tmpDir);
+    await manager.startWorkflow('test-wf', 'autopilot', ['s1', 's2', 's3']);
+    await manager.recordWorkflowStep('s1', 'running');
+
+    const state = manager.getWorkflowState();
+    const step = state!.steps.find((s) => s.stepId === 's1');
+    expect(step!.status).toBe('running');
+    expect(step!.startedAt).toBeDefined();
+  });
+
+  it('스텝 상태를 completed로 업데이트하고 result를 저장한다', async () => {
+    await manager.start(tmpDir);
+    await manager.startWorkflow('test-wf', 'autopilot', ['s1', 's2', 's3']);
+    await manager.recordWorkflowStep('s1', 'completed', { data: 'ok' });
+
+    const state = manager.getWorkflowState();
+    const step = state!.steps.find((s) => s.stepId === 's1');
+    expect(step!.status).toBe('completed');
+    expect(step!.completedAt).toBeDefined();
+    expect(step!.result).toEqual({ data: 'ok' });
+  });
+
+  it('모든 스텝 완료 시 워크플로우 phase가 completed가 된다', async () => {
+    await manager.start(tmpDir);
+    await manager.startWorkflow('test-wf', 'autopilot', ['s1', 's2', 's3']);
+    await manager.recordWorkflowStep('s1', 'completed');
+    await manager.recordWorkflowStep('s2', 'completed');
+    await manager.recordWorkflowStep('s3', 'completed');
+
+    const state = manager.getWorkflowState();
+    expect(state!.phase).toBe('completed');
+  });
+
+  it('실패한 스텝이 있으면 phase가 failed가 된다', async () => {
+    await manager.start(tmpDir);
+    await manager.startWorkflow('test-wf', 'autopilot', ['s1', 's2', 's3']);
+    await manager.recordWorkflowStep('s1', 'completed');
+    await manager.recordWorkflowStep('s2', 'failed');
+    await manager.recordWorkflowStep('s3', 'completed');
+
+    const state = manager.getWorkflowState();
+    expect(state!.phase).toBe('failed');
+  });
+
+  it('워크플로우 상태가 파일에 영속된다', async () => {
+    const session = await manager.start(tmpDir);
+    await manager.startWorkflow('test-wf', 'autopilot', ['s1', 's2']);
+    await manager.recordWorkflowStep('s1', 'running');
+
+    const filePath = path.join(tmpDir, '.junflow', 'sessions', `${session.id}.json`);
+    const content = await fs.readFile(filePath, 'utf-8');
+    const saved = JSON.parse(content);
+
+    expect(saved.workflowState).toBeDefined();
+    expect(saved.workflowState.workflowName).toBe('test-wf');
+    expect(saved.workflowState.steps[0].status).toBe('running');
+    expect(saved.workflowState.steps[0].startedAt).toBeDefined();
+  });
+});
+
+describe('SessionManager.getWorkflowState', () => {
+  it('워크플로우가 없으면 undefined를 반환한다', async () => {
+    await manager.start(tmpDir);
+    const state = manager.getWorkflowState();
+    expect(state).toBeUndefined();
+  });
+});

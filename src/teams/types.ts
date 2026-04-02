@@ -13,6 +13,18 @@ export interface WorkflowStep {
   optional?: boolean;
 }
 
+/** 워크플로우 실행 옵션 */
+export interface WorkflowOptions {
+  /** 스텝 상태 변경 시 호출되는 콜백 */
+  onProgress?: (stepId: string, status: StepStatus) => void;
+  /** 워크플로우 취소를 위한 AbortSignal */
+  signal?: AbortSignal;
+  /** 실패한 스텝의 최대 재시도 횟수 (기본 0) */
+  maxRetries?: number;
+}
+
+export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'retrying';
+
 export interface WorkflowResult {
   workflow: string;
   steps: StepResult[];
