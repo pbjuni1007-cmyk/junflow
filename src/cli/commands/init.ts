@@ -66,7 +66,8 @@ async function checkGitignore(cwd: string): Promise<void> {
 export const initCommand = new Command('init')
   .description('대화형 위저드로 git-pilot 설정을 초기화합니다')
   .option('--hooks', 'Claude Code settings.json에 자연어 라우팅 훅을 등록합니다')
-  .action(async (options: { hooks?: boolean }) => {
+  .option('--local', '프로젝트 로컬 설정 파일(.git-pilot.yaml)을 생성합니다')
+  .action(async (options: { hooks?: boolean; local?: boolean }) => {
     if (options.hooks) {
       const spinner = ora('Claude Code 훅 등록 중...').start();
       try {
@@ -79,8 +80,12 @@ export const initCommand = new Command('init')
       return;
     }
 
-    console.log(chalk.bold.cyan('\nGit Pilot 초기화 위저드'));
-    console.log(chalk.gray('Git 워크플로우 자동화 도구를 설정합니다. Enter를 눌러 기본값을 사용하세요.\n'));
+    const isLocal = options.local === true;
+    console.log(chalk.bold.cyan(`\nGit Pilot 초기화 위저드 ${isLocal ? '(프로젝트 로컬)' : '(글로벌)'}`));
+    console.log(chalk.gray(isLocal
+      ? '이 프로젝트의 .git-pilot.yaml을 생성합니다. Enter를 눌러 기본값을 사용하세요.\n'
+      : 'Git 워크플로우 자동화 도구를 설정합니다. Enter를 눌러 기본값을 사용하세요.\n',
+    ));
 
     const answers = await inquirer.prompt([
       {
@@ -247,20 +252,24 @@ export const initCommand = new Command('init')
 
     const spinner = ora('설정 파일 저장 중...').start();
     try {
-      await saveConfig(config);
+      await saveConfig(config, isLocal ? { local: true } : undefined);
       spinner.stop();
 
-      logger.success('설정 파일이 저장되었습니다.');
-
-      // .gitignore 확인
-      await checkGitignore(process.cwd());
-
-      // Next step 안내
-      console.log(chalk.bold.cyan('\n다음 단계:'));
-      console.log(`  ${chalk.green('Claude Code에서 사용:')} /git-pilot-start, /git-pilot-commit`);
-      console.log(`  ${chalk.green('상태 확인:')} git-pilot status`);
-      console.log(`  ${chalk.green('설정 확인:')} git-pilot config show`);
-      console.log(`  ${chalk.green('훅 등록:')} git-pilot init --hooks\n`);
+      if (isLocal) {
+        logger.success('프로젝트 로컬 설정 파일(.git-pilot.yaml)이 저장되었습니다.');
+        await checkGitignore(process.cwd());
+        console.log(chalk.bold.cyan('\n다음 단계:'));
+        console.log(`  ${chalk.green('이슈 시작:')} /git-pilot-start <issue-id>`);
+        console.log(`  ${chalk.green('커밋:')} /git-pilot-commit`);
+        console.log(chalk.gray('\n  Tip: API 토큰은 환경변수로 설정하면 config에 포함되지 않아 안전합니다.\n'));
+      } else {
+        logger.success('글로벌 설정 파일이 저장되었습니다.');
+        await checkGitignore(process.cwd());
+        console.log(chalk.bold.cyan('\n다음 단계:'));
+        console.log(`  ${chalk.green('프로젝트별 설정:')} git-pilot init --local`);
+        console.log(`  ${chalk.green('상태 확인:')} git-pilot status`);
+        console.log(`  ${chalk.green('훅 등록:')} git-pilot init --hooks\n`);
+      }
     } catch (err) {
       spinner.stop();
       handleCliError(err);

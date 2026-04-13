@@ -4,6 +4,7 @@ import type { GitPilotConfig } from './schema.js';
 
 export const CONFIG_DIR = path.join(os.homedir(), '.git-pilot');
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yaml');
+export const LOCAL_CONFIG_FILE = '.git-pilot.yaml';
 
 export const DEFAULT_CONFIG: GitPilotConfig = {
   tracker: {
