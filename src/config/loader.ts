@@ -30,6 +30,14 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: Partial
 function applyEnvOverrides(config: JunFlowConfig): JunFlowConfig {
   const result = structuredClone(config);
 
+  if (result.ai.provider === 'claude' && process.env['ANTHROPIC_API_KEY']) {
+    result.ai.apiKey = process.env['ANTHROPIC_API_KEY'];
+  } else if (result.ai.provider === 'openai' && process.env['OPENAI_API_KEY']) {
+    result.ai.apiKey = process.env['OPENAI_API_KEY'];
+  } else if (result.ai.provider === 'gemini' && process.env['GEMINI_API_KEY']) {
+    result.ai.apiKey = process.env['GEMINI_API_KEY'];
+  }
+
   if (process.env['NOTION_API_KEY'] && result.tracker.notion) {
     result.tracker.notion.apiKey = process.env['NOTION_API_KEY'];
   }
@@ -72,11 +80,6 @@ export async function loadConfig(): Promise<JunFlowConfig> {
       return applyEnvOverrides(DEFAULT_CONFIG);
     }
     throw err;
-  }
-
-  // 기존 config에 ai 섹션이 있으면 무시 (하위 호환)
-  if (raw && typeof raw === 'object' && 'ai' in raw) {
-    delete (raw as Record<string, unknown>)['ai'];
   }
 
   const merged = deepMerge(DEFAULT_CONFIG as Record<string, unknown>, (raw ?? {}) as Record<string, unknown>);

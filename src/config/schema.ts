@@ -16,6 +16,29 @@ const hookDefinitionSchema = z.object({
   continueOnError: z.boolean().optional(),
 });
 
+const agentRoutingEntrySchema = z.object({
+  provider: z.enum(['claude', 'openai', 'gemini']).optional(),
+  model: z.string().optional(),
+  timeout: z.number().int().positive().optional(),
+});
+
+export type AgentRoutingEntry = z.infer<typeof agentRoutingEntrySchema>;
+
+const agentRoutingSchema = z
+  .object({
+    issueAnalyzer: agentRoutingEntrySchema.optional(),
+    branchNamer: agentRoutingEntrySchema.optional(),
+    commitWriter: agentRoutingEntrySchema.optional(),
+    codeReviewer: agentRoutingEntrySchema.optional(),
+    documentReviewer: agentRoutingEntrySchema.optional(),
+    deepResearcher: agentRoutingEntrySchema.optional(),
+    verifier: agentRoutingEntrySchema.optional(),
+    taskDecomposer: agentRoutingEntrySchema.optional(),
+  })
+  .optional();
+
+export type AgentRouting = z.infer<typeof agentRoutingSchema>;
+
 const cliProfileSchema = z.object({
   bin: z.string().optional(),
   defaultProfile: z.string().optional(),
@@ -39,6 +62,23 @@ const cliSchema = z
   .optional();
 
 export const junFlowConfigSchema = z.object({
+  ai: z.object({
+    provider: z.enum(['claude', 'openai', 'gemini']).default('claude'),
+    model: z.string().default('claude-sonnet-4-20250514'),
+    apiKey: z.string().optional(),
+    maxTokens: z.number().int().positive().default(2048),
+    agentModels: z
+      .object({
+        issueAnalyzer: z.string().optional(),
+        branchNamer: z.string().optional(),
+        commitWriter: z.string().optional(),
+        codeReviewer: z.string().optional(),
+        documentReviewer: z.string().optional(),
+        deepResearcher: z.string().optional(),
+      })
+      .optional(),
+    agentRouting: agentRoutingSchema,
+  }),
   tracker: z.object({
     type: z.enum(['notion', 'github', 'jira', 'mock']),
     notion: z
